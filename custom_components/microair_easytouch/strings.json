@@ -1,0 +1,74 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Micro-Air EasyTouch Setup",
+        "description": "Choose how to connect to your EasyTouch thermostat.",
+        "data": {
+          "connection_type": "Connection type"
+        }
+      },
+      "wifi": {
+        "title": "WiFi Connection",
+        "description": "Enter the local IP address of your EasyTouch thermostat. Make sure it is on the same network as Home Assistant.",
+        "data": {
+          "name": "Device name",
+          "ip_address": "IP address"
+        }
+      },
+      "ble_pick": {
+        "title": "Select Thermostat",
+        "description": "Select your EasyTouch thermostat from the list of nearby Bluetooth devices ({count} found).",
+        "data": {
+          "mac_address": "Device"
+        }
+      },
+      "ble_credentials": {
+        "title": "Bluetooth Credentials",
+        "description": "Optionally enter your Micro-Air account credentials for device {mac}. Leave both fields blank if your thermostat does not require a password.",
+        "data": {
+          "email": "Account email (optional)",
+          "password": "Account password (optional)"
+        }
+      },
+      "zones": {
+        "title": "Zone Count",
+        "description": "How many independently controllable zones does your EasyTouch thermostat have? (max {max})",
+        "data": {
+          "zone_count": "Number of zones"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the thermostat. Check the address and try again.",
+      "no_devices_found": "No EasyTouch thermostats found nearby. Make sure Bluetooth is enabled and the thermostat is powered on.",
+      "unknown": "Unexpected error. Check the logs for details."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  },
+  "entity": {
+    "climate": {
+      "thermostat": {
+        "name": "Thermostat"
+      }
+    },
+    "sensor": {
+      "current_temperature": {
+        "name": "Current Temperature"
+      },
+      "humidity": {
+        "name": "Humidity"
+      },
+      "line_voltage": {
+        "name": "Line Voltage"
+      }
+    },
+    "button": {
+      "reboot": {
+        "name": "Reboot"
+      }
+    }
+  }
+}
