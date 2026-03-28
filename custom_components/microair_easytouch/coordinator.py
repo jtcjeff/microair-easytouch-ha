@@ -13,10 +13,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import aiohttp
+
 from homeassistant.components.climate import HVACAction, HVACMode
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import update_coordinator
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     BLE_FAN_MODE_DEVICE_TO_HA,
@@ -102,23 +103,35 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
         )
         self._ip = ip_address
         self._zone_count = zone_count
-        self._session = async_get_clientsession(hass)
 
         # Per-zone pending setpoint debounce
         self._pending_setpoints: dict[int, float] = {}
         self._setpoint_tasks: dict[int, asyncio.Task] = {}
+
+    # ── HTTP helper ───────────────────────────────────────────────────────────
+
+    async def _post(self, url: str, data: bytes | str = b"") -> tuple[int, str]:
+        """POST with a dedicated force-close connection.
+
+        The EasyTouch embedded HTTP server rejects keep-alive connections, so
+        we create a fresh TCP connection for each request and close it immediately.
+        """
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(force_close=True),
+            connector_owner=True,
+        ) as session:
+            async with session.post(url, data=data, timeout=timeout) as resp:
+                return resp.status, await resp.text()
 
     # ── Connection test ──────────────────────────────────────────────────────
 
     async def test_connection(self) -> bool:
         url = f"http://{self._ip}/ShortStatus"
         try:
-            resp = await self._session.post(
-                url, data=b"", headers={"Connection": "close"}, timeout=10
-            )
-            text = await resp.text()
-            _LOGGER.debug("ShortStatus test — HTTP %s, body: %s", resp.status, text[:200])
-            return resp.status == 200
+            status, text = await self._post(url)
+            _LOGGER.debug("ShortStatus test — HTTP %s, body: %s", status, text[:200])
+            return status == 200
         except Exception as exc:
             raise update_coordinator.UpdateFailed(f"Cannot reach {self._ip}: {exc}") from exc
 
@@ -127,14 +140,11 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
     async def _async_update_data(self) -> ZoneData:
         url = f"http://{self._ip}/ShortStatus"
         try:
-            resp = await self._session.post(
-                url, data=b"", headers={"Connection": "close"}, timeout=10
-            )
-            if resp.status != 200:
+            status, raw = await self._post(url)
+            if status != 200:
                 raise update_coordinator.UpdateFailed(
-                    f"ShortStatus returned HTTP {resp.status}"
+                    f"ShortStatus returned HTTP {status}"
                 )
-            raw = await resp.text()
             _LOGGER.debug("ShortStatus raw: %s", raw)
             return self._parse_xml(raw)
         except update_coordinator.UpdateFailed:
@@ -265,15 +275,12 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
         url = f"http://{self._ip}/Transmission"
         _LOGGER.debug("Zone %d: transmitting %s", zone, final_cmd)
         try:
-            resp = await self._session.post(
-                url, data=final_cmd, headers={"Connection": "close"}, timeout=10
-            )
-            body = await resp.text()
-            _LOGGER.debug("Transmission response: HTTP %s  body: %s", resp.status, body)
-            if resp.status != 200 or "<X>OK</X>" not in body:
+            status, body = await self._post(url, data=final_cmd)
+            _LOGGER.debug("Transmission response: HTTP %s  body: %s", status, body)
+            if status != 200 or "<X>OK</X>" not in body:
                 _LOGGER.error(
                     "Zone %d: Transmission rejected (HTTP %s): %s",
-                    zone, resp.status, body,
+                    zone, status, body,
                 )
                 return False
             return True

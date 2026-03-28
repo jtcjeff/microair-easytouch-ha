@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -22,7 +23,6 @@ from homeassistant.components.bluetooth import (
 from homeassistant.const import CONF_NAME, CONF_PASSWORD
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     CONF_CONNECTION_TYPE,
@@ -121,18 +121,19 @@ class MicroAirConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
             try:
-                session = async_get_clientsession(self.hass)
-                resp = await session.post(
-                    f"http://{ip}/ShortStatus",
-                    data=b"",
-                    headers={"Connection": "close"},
-                    timeout=10,
-                )
-                if resp.status != 200:
-                    errors["base"] = "cannot_connect"
-                else:
-                    raw = await resp.text()
-                    _LOGGER.debug("ShortStatus raw response: %s", raw)
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(
+                    connector=aiohttp.TCPConnector(force_close=True),
+                    connector_owner=True,
+                ) as session:
+                    async with session.post(
+                        f"http://{ip}/ShortStatus", data=b"", timeout=timeout
+                    ) as resp:
+                        if resp.status != 200:
+                            errors["base"] = "cannot_connect"
+                        else:
+                            raw = await resp.text()
+                            _LOGGER.debug("ShortStatus raw response: %s", raw)
             except Exception as exc:
                 _LOGGER.warning("WiFi connection test failed: %s", exc)
                 errors["base"] = "cannot_connect"
