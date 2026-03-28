@@ -13,8 +13,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-import aiohttp
-
 from homeassistant.components.climate import HVACAction, HVACMode
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import update_coordinator
@@ -111,28 +109,62 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
 
     # ── HTTP helper ───────────────────────────────────────────────────────────
 
-    async def _post(self, url: str, data: bytes | str = b"") -> tuple[int, str]:
-        """POST with a dedicated HTTP/1.0 force-close connection.
+    async def _post(self, path: str, data: bytes | str = b"") -> tuple[int, str]:
+        """POST using a raw TCP socket with a minimal HTTP/1.0 request.
 
-        The EasyTouch embedded HTTP server is a legacy HTTP/1.0 implementation.
-        HTTP/1.1 features (keep-alive, chunked transfer, etc.) cause it to
-        drop the connection before responding.
+        The EasyTouch embedded server rejects all modern HTTP clients.
+        We send the absolute minimum HTTP/1.0 request with no extra headers
+        so nothing can trigger a premature connection close.
         """
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(force_close=True),
-            connector_owner=True,
-            version=aiohttp.HttpVersion10,
-        ) as session:
-            async with session.post(url, data=data, timeout=timeout) as resp:
-                return resp.status, await resp.text()
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+
+        body_len = len(data)
+        request = (
+            f"POST {path} HTTP/1.0\r\n"
+            f"Content-Length: {body_len}\r\n"
+            "\r\n"
+        ).encode("utf-8") + data
+
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(self._ip, 80),
+            timeout=10,
+        )
+        try:
+            writer.write(request)
+            await writer.drain()
+
+            response = await asyncio.wait_for(reader.read(65536), timeout=10)
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+        text = response.decode("utf-8", errors="replace")
+        # Split status line from body
+        if "\r\n\r\n" in text:
+            header_part, body = text.split("\r\n\r\n", 1)
+        elif "\n\n" in text:
+            header_part, body = text.split("\n\n", 1)
+        else:
+            header_part, body = text, ""
+
+        status_line = header_part.split("\r\n")[0] if "\r\n" in header_part else header_part.split("\n")[0]
+        try:
+            status_code = int(status_line.split()[1])
+        except (IndexError, ValueError):
+            status_code = 200  # assume OK if we got any response
+
+        _LOGGER.debug("Raw HTTP response: status=%s body=%r", status_code, body[:200])
+        return status_code, body
 
     # ── Connection test ──────────────────────────────────────────────────────
 
     async def test_connection(self) -> bool:
-        url = f"http://{self._ip}/ShortStatus"
         try:
-            status, text = await self._post(url)
+            status, text = await self._post("/ShortStatus")
             _LOGGER.debug("ShortStatus test — HTTP %s, body: %s", status, text[:200])
             return status == 200
         except Exception as exc:
@@ -141,9 +173,8 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
     # ── Polling ──────────────────────────────────────────────────────────────
 
     async def _async_update_data(self) -> ZoneData:
-        url = f"http://{self._ip}/ShortStatus"
         try:
-            status, raw = await self._post(url)
+            status, raw = await self._post("/ShortStatus")
             if status != 200:
                 raise update_coordinator.UpdateFailed(
                     f"ShortStatus returned HTTP {status}"
@@ -275,10 +306,9 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
             return False
 
         final_cmd = cmd.replace("xx", network_id)
-        url = f"http://{self._ip}/Transmission"
         _LOGGER.debug("Zone %d: transmitting %s", zone, final_cmd)
         try:
-            status, body = await self._post(url, data=final_cmd)
+            status, body = await self._post("/Transmission", data=final_cmd)
             _LOGGER.debug("Transmission response: HTTP %s  body: %s", status, body)
             if status != 200 or "<X>OK</X>" not in body:
                 _LOGGER.error(

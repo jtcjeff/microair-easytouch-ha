@@ -12,7 +12,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import aiohttp
+import asyncio
+
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -23,6 +24,8 @@ from homeassistant.components.bluetooth import (
 from homeassistant.const import CONF_NAME, CONF_PASSWORD
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
+
+_HTTP_REQUEST = b"POST /ShortStatus HTTP/1.0\r\nContent-Length: 0\r\n\r\n"
 
 from .const import (
     CONF_CONNECTION_TYPE,
@@ -121,20 +124,24 @@ class MicroAirConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
             try:
-                timeout = aiohttp.ClientTimeout(total=10)
-                async with aiohttp.ClientSession(
-                    connector=aiohttp.TCPConnector(force_close=True),
-                    connector_owner=True,
-                    version=aiohttp.HttpVersion10,
-                ) as session:
-                    async with session.post(
-                        f"http://{ip}/ShortStatus", data=b"", timeout=timeout
-                    ) as resp:
-                        if resp.status != 200:
-                            errors["base"] = "cannot_connect"
-                        else:
-                            raw = await resp.text()
-                            _LOGGER.debug("ShortStatus raw response: %s", raw)
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(ip, 80), timeout=10
+                )
+                try:
+                    writer.write(_HTTP_REQUEST)
+                    await writer.drain()
+                    response = await asyncio.wait_for(reader.read(65536), timeout=10)
+                finally:
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+
+                text = response.decode("utf-8", errors="replace")
+                _LOGGER.debug("ShortStatus raw response: %s", text[:300])
+                if not text.startswith("HTTP"):
+                    errors["base"] = "cannot_connect"
             except Exception as exc:
                 _LOGGER.warning("WiFi connection test failed: %s", exc)
                 errors["base"] = "cannot_connect"
