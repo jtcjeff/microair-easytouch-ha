@@ -26,6 +26,7 @@ from .const import (
     BLE_MAX_AUTH_ATTEMPTS,
     BLE_PASSWORD_CMD_UUID,
     BLE_READ_TIMEOUT,
+    BLE_STATUS_ONLY_UUID,
     BLE_UPDATE_INTERVAL,
     DEFAULT_ZONE_COUNT,
     DOMAIN,
@@ -111,15 +112,17 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
     # ── HTTP helper ───────────────────────────────────────────────────────────
 
     async def _post(self, url: str, data: bytes | str = b"") -> tuple[int, str]:
-        """POST with a dedicated force-close connection.
+        """POST with a dedicated HTTP/1.0 force-close connection.
 
-        The EasyTouch embedded HTTP server rejects keep-alive connections, so
-        we create a fresh TCP connection for each request and close it immediately.
+        The EasyTouch embedded HTTP server is a legacy HTTP/1.0 implementation.
+        HTTP/1.1 features (keep-alive, chunked transfer, etc.) cause it to
+        drop the connection before responding.
         """
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(force_close=True),
             connector_owner=True,
+            version=aiohttp.HttpVersion10,
         ) as session:
             async with session.post(url, data=data, timeout=timeout) as resp:
                 return resp.status, await resp.text()
@@ -373,12 +376,12 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
     # ── BLE communication ────────────────────────────────────────────────────
 
     async def _query_all_zones(self) -> ZoneData:
-        """Connect once, authenticate, send ONE Get Status, parse ALL zones from response.
+        """Connect once and read all-zone status.
 
-        The device returns a single JSON blob with Z_sts keyed by zone index string
-        ("0", "1", "2"), so one request covers all zones.  Responses frequently arrive
-        in multiple BLE notification chunks (MTU fragmentation); we accumulate until
-        the buffer forms valid JSON, falling back to polled READs if NOTIFY is unavailable.
+        Strategy (in order):
+        1. Read the statusOnly characteristic (BB01) — no command needed, fastest path.
+        2. Fall back to sending a Get Status command via EE01 and reading the response
+           from FF01 (with NOTIFY accumulation or polled READs).
         """
         from homeassistant.components.bluetooth import async_ble_device_from_address
 
@@ -401,7 +404,13 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
                 # Auth is best-effort — some devices accept anything, some need the password
                 await self._authenticate(client)
 
-                # Set up notification accumulator
+                # ── Try BB01 (statusOnly) first — direct read, no command required ──
+                raw_status = await self._read_status_only(client)
+                if raw_status is not None:
+                    _LOGGER.debug("BB01 status: %s", raw_status)
+                    return self._parse_all_zones(raw_status)
+
+                # ── Fall back to Get Status via EE01 / FF01 ──────────────────────
                 chunks: list[bytes] = []
                 response_ready = asyncio.Event()
 
@@ -456,6 +465,33 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
             else:
                 _LOGGER.error("BLE error for %s: %s", self._mac, exc)
             return {}
+
+    async def _read_status_only(self, client: Any) -> dict[str, Any] | None:
+        """Try to read the statusOnly characteristic (BB01) without sending a command.
+
+        This characteristic is updated by the device and can be read directly.
+        Returns parsed JSON dict on success, None if unavailable or unreadable.
+        """
+        try:
+            raw = await asyncio.wait_for(
+                client.read_gatt_char(BLE_STATUS_ONLY_UUID),
+                timeout=BLE_READ_TIMEOUT,
+            )
+            if not raw:
+                return None
+            text = bytes(raw).decode("utf-8", errors="replace").strip()
+            _LOGGER.debug("BB01 raw: %r", text)
+            parsed = json.loads(text)
+            # Only use this response if it contains zone status data
+            if "Z_sts" in parsed:
+                return parsed
+            _LOGGER.debug("BB01 response has no Z_sts — falling back to Get Status")
+            return None
+        except (asyncio.TimeoutError, json.JSONDecodeError):
+            return None
+        except Exception as exc:
+            _LOGGER.debug("BB01 read unavailable: %s", exc)
+            return None
 
     async def _authenticate(self, client: Any) -> bool:
         """Write password to the auth characteristic (best-effort).

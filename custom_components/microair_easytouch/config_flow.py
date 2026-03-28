@@ -125,6 +125,7 @@ class MicroAirConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 async with aiohttp.ClientSession(
                     connector=aiohttp.TCPConnector(force_close=True),
                     connector_owner=True,
+                    version=aiohttp.HttpVersion10,
                 ) as session:
                     async with session.post(
                         f"http://{ip}/ShortStatus", data=b"", timeout=timeout
