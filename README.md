@@ -96,7 +96,7 @@ Zones are named **Zone 1**, **Zone 2**, **Zone 3** — you can rename them in HA
 
 ### Bluetooth
 
-- Polling interval: **60 seconds**
+- Polling interval: **30 seconds**
 - Uses a single BLE connection per poll to query all zones at once
 - If you see `BLE busy (InProgress)` in the logs, another device (e.g. the phone app) has an open connection — it will resolve automatically on the next poll cycle
 - BLE range is typically 10–30 ft depending on walls and interference

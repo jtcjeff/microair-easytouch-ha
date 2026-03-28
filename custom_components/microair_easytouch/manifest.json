@@ -11,10 +11,10 @@
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["bluetooth"],
-  "documentation": "https://github.com/your-repo/microair-easytouch-ha",
+  "documentation": "https://github.com/jtcjeff/microair-easytouch-ha",
   "integration_type": "device",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/your-repo/microair-easytouch-ha/issues",
+  "issue_tracker": "https://github.com/jtcjeff/microair-easytouch-ha/issues",
   "requirements": [
     "defusedxml>=0.7.1",
     "bleak>=0.21.0",
