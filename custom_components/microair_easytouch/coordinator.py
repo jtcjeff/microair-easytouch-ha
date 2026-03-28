@@ -113,7 +113,9 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
     async def test_connection(self) -> bool:
         url = f"http://{self._ip}/ShortStatus"
         try:
-            resp = await self._session.post(url, timeout=10)
+            resp = await self._session.post(
+                url, data=b"", headers={"Connection": "close"}, timeout=10
+            )
             text = await resp.text()
             _LOGGER.debug("ShortStatus test — HTTP %s, body: %s", resp.status, text[:200])
             return resp.status == 200
@@ -125,7 +127,9 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
     async def _async_update_data(self) -> ZoneData:
         url = f"http://{self._ip}/ShortStatus"
         try:
-            resp = await self._session.post(url, timeout=10)
+            resp = await self._session.post(
+                url, data=b"", headers={"Connection": "close"}, timeout=10
+            )
             if resp.status != 200:
                 raise update_coordinator.UpdateFailed(
                     f"ShortStatus returned HTTP {resp.status}"
@@ -261,7 +265,9 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
         url = f"http://{self._ip}/Transmission"
         _LOGGER.debug("Zone %d: transmitting %s", zone, final_cmd)
         try:
-            resp = await self._session.post(url, data=final_cmd, timeout=10)
+            resp = await self._session.post(
+                url, data=final_cmd, headers={"Connection": "close"}, timeout=10
+            )
             body = await resp.text()
             _LOGGER.debug("Transmission response: HTTP %s  body: %s", resp.status, body)
             if resp.status != 200 or "<X>OK</X>" not in body:

@@ -122,7 +122,12 @@ class MicroAirConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             try:
                 session = async_get_clientsession(self.hass)
-                resp = await session.post(f"http://{ip}/ShortStatus", timeout=10)
+                resp = await session.post(
+                    f"http://{ip}/ShortStatus",
+                    data=b"",
+                    headers={"Connection": "close"},
+                    timeout=10,
+                )
                 if resp.status != 200:
                     errors["base"] = "cannot_connect"
                 else:
