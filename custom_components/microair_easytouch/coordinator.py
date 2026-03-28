@@ -358,7 +358,13 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
 # ── BLE coordinator ──────────────────────────────────────────────────────────
 
 class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]):
-    """Communicates with the EasyTouch thermostat via Bluetooth LE."""
+    """Communicates with the EasyTouch thermostat via Bluetooth LE.
+
+    Maintains a single persistent BLE connection for the lifetime of the
+    integration.  Connecting and disconnecting on every poll causes the
+    thermostat to treat each disconnect as "remote session ended" and reset
+    zone states — most visibly Zone 3 randomly turning off.
+    """
 
     def __init__(
         self,
@@ -380,24 +386,123 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         self._email = email
         self._zone_count = zone_count
 
+        # Persistent connection state
+        self._client: Any = None          # BleakClient when connected
+        self._connect_lock = asyncio.Lock()  # serialise (re)connection attempts
+        self._ble_op_lock = asyncio.Lock()   # serialise reads/writes on the connection
+        self._authenticated = False
+
+    # ── Disconnect callback (called by bleak from BLE thread) ────────────────
+
+    def _on_disconnect(self, client: Any) -> None:
+        """Bleak fires this when the connection drops unexpectedly."""
+        _LOGGER.warning(
+            "BLE %s connection lost — will reconnect automatically on next poll",
+            self._mac,
+        )
+        self._client = None
+        self._authenticated = False
+
+    # ── Connection management ─────────────────────────────────────────────────
+
+    async def _ensure_connected(self) -> Any | None:
+        """Return a live BleakClient, (re)connecting if necessary."""
+        async with self._connect_lock:
+            if self._client is not None and self._client.is_connected:
+                return self._client
+
+            # Stale reference — clear it before reconnecting
+            self._client = None
+            self._authenticated = False
+
+            from homeassistant.components.bluetooth import async_ble_device_from_address
+            from bleak_retry_connector import establish_connection
+            from bleak import BleakClient
+
+            ble_device = async_ble_device_from_address(
+                self.hass, self._mac, connectable=True
+            )
+            if ble_device is None:
+                _LOGGER.error(
+                    "BLE device %s not found — ensure it is powered on and in range",
+                    self._mac,
+                )
+                return None
+
+            try:
+                _LOGGER.debug("(Re)connecting to %s", self._mac)
+                # Do NOT use async-with — we want to keep the connection alive
+                client = await establish_connection(
+                    BleakClient,
+                    ble_device,
+                    self._mac,
+                    disconnected_callback=self._on_disconnect,
+                    max_attempts=2,
+                )
+                self._client = client
+                _LOGGER.debug("Connected to %s (persistent session)", self._mac)
+                return client
+            except asyncio.TimeoutError:
+                _LOGGER.warning("BLE connect timed out for %s", self._mac)
+                return None
+            except Exception as exc:
+                exc_str = str(exc)
+                if "InProgress" in exc_str or "in progress" in exc_str.lower():
+                    _LOGGER.warning(
+                        "BLE busy for %s — close the EasyTouch app; will retry", self._mac
+                    )
+                else:
+                    _LOGGER.error("BLE connect failed for %s: %s", self._mac, exc)
+                return None
+
+    async def async_shutdown(self) -> None:
+        """Disconnect cleanly when the integration is unloaded."""
+        client = self._client
+        self._client = None
+        if client is not None:
+            try:
+                await client.disconnect()
+                _LOGGER.debug("BLE %s disconnected cleanly on shutdown", self._mac)
+            except Exception:
+                pass
+
     # ── Connection test ──────────────────────────────────────────────────────
 
     async def test_connection(self) -> bool:
-        result = await self._query_all_zones()
+        client = await self._ensure_connected()
+        if client is None:
+            raise update_coordinator.UpdateFailed(
+                f"BLE connection to {self._mac} failed"
+            )
+        async with self._ble_op_lock:
+            await self._authenticate(client)
+            result = await self._poll_device(client)
         if not result:
             raise update_coordinator.UpdateFailed(
-                f"BLE connection to {self._mac} failed or returned no data"
+                f"BLE connected but returned no data from {self._mac}"
             )
         return True
 
     # ── Polling ──────────────────────────────────────────────────────────────
 
     async def _async_update_data(self) -> ZoneData:
-        """Open ONE BLE connection and query all zones within it."""
-        result = await self._query_all_zones()
+        """Poll the device using the persistent BLE connection."""
+        client = await self._ensure_connected()
+        if client is None:
+            raise update_coordinator.UpdateFailed(
+                f"BLE unavailable for {self._mac} — will retry in {BLE_UPDATE_INTERVAL.seconds}s"
+            )
+
+        async with self._ble_op_lock:
+            if not self._authenticated:
+                await self._authenticate(client)
+                self._authenticated = True
+
+            result = await self._poll_device(client)
+
         if not result:
-            # Raise UpdateFailed so HA marks entities unavailable until next successful poll.
-            # This is a warning-level condition — transient BLE misses are normal.
+            # Got a connection but no data — treat as stale and force reconnect
+            self._client = None
             raise update_coordinator.UpdateFailed(
                 f"BLE poll missed for {self._mac} — will retry in {BLE_UPDATE_INTERVAL.seconds}s"
             )
@@ -405,96 +510,52 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
 
     # ── BLE communication ────────────────────────────────────────────────────
 
-    async def _query_all_zones(self) -> ZoneData:
-        """Connect once and read all-zone status.
+    async def _poll_device(self, client: Any) -> ZoneData:
+        """Read current status from an already-connected client.
 
-        Strategy (in order):
-        1. Read the statusOnly characteristic (BB01) — no command needed, fastest path.
-        2. Fall back to sending a Get Status command via EE01 and reading the response
-           from FF01 (with NOTIFY accumulation or polled READs).
+        Tries BB01 (statusOnly, direct read) first, then falls back to
+        sending a Get Status command via EE01 and reading the response from FF01.
         """
-        from homeassistant.components.bluetooth import async_ble_device_from_address
+        # ── Try BB01 (statusOnly) — direct read, no command needed ───────────
+        raw_status = await self._read_status_only(client)
+        if raw_status is not None:
+            _LOGGER.debug("BB01 status: %s", raw_status)
+            return self._parse_all_zones(raw_status)
 
-        ble_device = async_ble_device_from_address(self.hass, self._mac, connectable=True)
-        if ble_device is None:
-            _LOGGER.error(
-                "BLE device %s not found — ensure it is powered on and in Bluetooth range",
-                self._mac,
-            )
-            return {}
+        # ── Fall back: Get Status via EE01 / FF01 ────────────────────────────
+        chunks: list[bytes] = []
+        response_ready = asyncio.Event()
+
+        def _on_notify(sender: Any, data: bytearray) -> None:
+            chunks.append(bytes(data))
+            try:
+                json.loads(b"".join(chunks).decode("utf-8", errors="replace"))
+                response_ready.set()
+            except (json.JSONDecodeError, ValueError):
+                pass  # More chunks coming
+
+        using_notify = False
+        try:
+            await client.start_notify(BLE_JSON_RETURN_UUID, _on_notify)
+            using_notify = True
+            _LOGGER.debug("NOTIFY enabled on jsonReturn")
+        except Exception as exc:
+            _LOGGER.debug("NOTIFY unavailable (%s) — will use READ", exc)
 
         try:
-            from bleak_retry_connector import establish_connection
-            from bleak import BleakClient
-
-            _LOGGER.debug("Connecting to %s", self._mac)
-            async with await establish_connection(
-                BleakClient, ble_device, self._mac, max_attempts=2
-            ) as client:
-                # Auth is best-effort — some devices accept anything, some need the password
-                await self._authenticate(client)
-
-                # ── Try BB01 (statusOnly) first — direct read, no command required ──
-                raw_status = await self._read_status_only(client)
-                if raw_status is not None:
-                    _LOGGER.debug("BB01 status: %s", raw_status)
-                    return self._parse_all_zones(raw_status)
-
-                # ── Fall back to Get Status via EE01 / FF01 ──────────────────────
-                chunks: list[bytes] = []
-                response_ready = asyncio.Event()
-
-                def _on_notify(sender: Any, data: bytearray) -> None:
-                    chunks.append(bytes(data))
-                    try:
-                        json.loads(b"".join(chunks).decode("utf-8", errors="replace"))
-                        response_ready.set()
-                    except (json.JSONDecodeError, ValueError):
-                        pass  # More chunks coming
-
-                using_notify = False
+            raw_status = await self._get_status(client, chunks, response_ready, using_notify)
+        finally:
+            if using_notify:
                 try:
-                    await client.start_notify(BLE_JSON_RETURN_UUID, _on_notify)
-                    using_notify = True
-                    _LOGGER.debug("NOTIFY enabled on jsonReturn")
-                except Exception as exc:
-                    _LOGGER.debug("NOTIFY unavailable (%s) — will use READ", exc)
+                    await client.stop_notify(BLE_JSON_RETURN_UUID)
+                except Exception:
+                    pass
 
-                try:
-                    raw_status = await self._get_status(
-                        client, chunks, response_ready, using_notify
-                    )
-                finally:
-                    if using_notify:
-                        try:
-                            await client.stop_notify(BLE_JSON_RETURN_UUID)
-                        except Exception:
-                            pass
-
-                if raw_status is None:
-                    return {}
-
-                _LOGGER.debug("Raw status: %s", raw_status)
-                return self._parse_all_zones(raw_status)
-
-        except asyncio.TimeoutError:
-            _LOGGER.warning("BLE poll timed out for %s — will retry next cycle", self._mac)
+        if raw_status is None:
             return {}
-        except Exception as exc:
-            exc_str = str(exc)
-            if "InProgress" in exc_str or "in progress" in exc_str.lower():
-                _LOGGER.warning(
-                    "BLE busy for %s — close the EasyTouch phone app; HA will retry.",
-                    self._mac,
-                )
-            elif "TimeoutError" in exc_str or "timed out" in exc_str.lower():
-                _LOGGER.warning(
-                    "BLE connection timed out for %s (device may be busy) — will retry next cycle",
-                    self._mac,
-                )
-            else:
-                _LOGGER.error("BLE error for %s: %s", self._mac, exc)
-            return {}
+
+        _LOGGER.debug("FF01 status: %s", raw_status)
+        return self._parse_all_zones(raw_status)
 
     async def _read_status_only(self, client: Any) -> dict[str, Any] | None:
         """Try to read the statusOnly characteristic (BB01) without sending a command.
@@ -622,33 +683,31 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
             return None
 
     async def _send_command(self, command: dict[str, Any]) -> bool:
-        """Send a Change command over a fresh BLE connection."""
-        from homeassistant.components.bluetooth import async_ble_device_from_address
-        from bleak_retry_connector import establish_connection
-        from bleak import BleakClient
-
-        ble_device = async_ble_device_from_address(self.hass, self._mac, connectable=True)
-        if ble_device is None:
-            _LOGGER.error("Cannot send command — BLE device %s not found", self._mac)
+        """Send a Change command using the persistent BLE connection."""
+        client = await self._ensure_connected()
+        if client is None:
+            _LOGGER.error("Cannot send command — BLE device %s not connected", self._mac)
             return False
 
         try:
-            async with await establish_connection(
-                BleakClient, ble_device, self._mac, max_attempts=1
-            ) as client:
-                await self._authenticate(client)
+            async with self._ble_op_lock:
+                if not self._authenticated:
+                    await self._authenticate(client)
+                    self._authenticated = True
                 cmd_bytes = json.dumps(command).encode("utf-8")
                 _LOGGER.debug("Sending: %s", command)
                 await asyncio.wait_for(
                     client.write_gatt_char(BLE_JSON_CMD_UUID, cmd_bytes, response=True),
                     timeout=BLE_READ_TIMEOUT,
                 )
-                return True
+            return True
         except Exception as exc:
             if "InProgress" in str(exc) or "in progress" in str(exc).lower():
                 _LOGGER.warning("BLE busy — command not sent. Close EasyTouch app.")
             else:
                 _LOGGER.error("BLE command error: %s", exc)
+                # Force reconnect on next operation
+                self._client = None
             return False
 
     # ── State parsing ────────────────────────────────────────────────────────

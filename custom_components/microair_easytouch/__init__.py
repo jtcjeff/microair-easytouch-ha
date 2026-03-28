@@ -77,6 +77,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     platforms = PLATFORMS_WIFI if conn_type == CONN_TYPE_WIFI else PLATFORMS_BLE
 
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, platforms):
-        hass.data[DOMAIN].pop(entry.entry_id)
+        entry_data = hass.data[DOMAIN].pop(entry.entry_id)
+        # Disconnect the persistent BLE connection cleanly on unload
+        if conn_type == CONN_TYPE_BLE:
+            coordinator = entry_data.get("coordinator")
+            if coordinator is not None:
+                await coordinator.async_shutdown()
 
     return unload_ok
