@@ -7,7 +7,7 @@ DOMAIN = "microair_easytouch"
 
 # Platforms
 PLATFORMS_WIFI = ["climate", "sensor"]
-PLATFORMS_BLE = ["climate", "sensor", "button"]
+PLATFORMS_BLE = ["climate", "sensor", "button", "select"]
 
 # Config entry keys
 CONF_CONNECTION_TYPE = "connection_type"
@@ -53,7 +53,9 @@ BLE_HVAC_HA_TO_DEVICE = {
     "heat":      4,
     "dry":       6,
     "auto":      11,
-    "heat_cool": 11,
+    # EasyTouch mode 10 is reported as "Cool/Heat Pump" and carries
+    # independent auto heat/cool setpoints.
+    "heat_cool": 10,
 }
 
 # current_mode_num (info[15]) — includes transitional states
@@ -64,6 +66,11 @@ BLE_CURRENT_MODE_MAP = {
     3:  "cool_on",   # compressor starting
     4:  "heat",
     5:  "heat_on",   # heat starting
+    # EasyTouch 350-series firmware 1.0.7.0 current-mode values.
+    35: "cool",
+    36: "heat",
+    37: "heat",
+    97: "cycle_delay",
     11: "auto",
 }
 
@@ -73,8 +80,34 @@ BLE_MODE_NUM_TO_HA = {
     1:  "fan_only",
     2:  "cool",
     4:  "heat",
+    # EasyTouch "Heat Pump" (heat-pump-only) mode.  It uses the heat
+    # setpoint, but its fan selection is stored in the auto-fan field.
+    5:  "heat",
     6:  "dry",
+    # Observed on an EasyTouch 350-series device as "Cool/Heat Pump".
+    10: "heat_cool",
     11: "auto",
+}
+
+# Device-specific equipment source for diagnostics and future command
+# selection.  HA's generic HVACMode cannot distinguish these three modes.
+BLE_EQUIPMENT_MODE_NUM_TO_NAME = {
+    4: "gas",
+    5: "heat_pump",
+    10: "auto_heat_pump",
+    11: "auto_gas",
+}
+BLE_EQUIPMENT_MODE_NAME_TO_DEVICE = {
+    "gas": 4,
+    "heat_pump": 5,
+    "auto_heat_pump": 10,
+    "auto_gas": 11,
+}
+BLE_EQUIPMENT_MODE_LABELS = {
+    "gas": "Gas",
+    "heat_pump": "Heat Pump",
+    "auto_gas": "Auto Gas",
+    "auto_heat_pump": "Auto Heat Pump",
 }
 
 # ── BLE response array indices (info = Z_sts["zone_key"]) ──────────────────
@@ -90,27 +123,42 @@ BLE_IDX_MODE_NUM       = 10
 BLE_IDX_HEAT_FAN_MODE  = 11
 BLE_IDX_TEMPERATURE    = 12
 BLE_IDX_CURRENT_MODE   = 15
+BLE_IDX_PRM_OUTSIDE_TEMP = 2
 
 # BLE Fan mode mappings
 BLE_FAN_MODES_FULL = {
     "off":       0,
     "low":       1,    # manualL
-    "high":      2,    # manualH
+    "medium":    2,    # manualM
+    "high":      3,    # manualH
+    # Confirmed from the user's Auto HP and Auto Gas fan matrix.
     "cycled_low":  65,
-    "cycled_high": 66,
+    # Confirmed from the user's Cool + Cycled Medium capture.
+    "cycled_medium": 66,
+    # Confirmed from the user's Cool + Cycled High capture.
+    "cycled_high": 67,
     "auto":      128,
 }
 BLE_FAN_MODES_FAN_ONLY = {
-    "off":  0,
-    "low":  1,
-    "high": 2,
+    "off":    0,
+    "low":    1,
+    "medium": 2,
+    "high":   3,
+}
+BLE_FAN_MODE_FAN_ONLY_DEVICE_TO_HA = {
+    0: "off",
+    1: "low",
+    2: "medium",
+    3: "high",
 }
 BLE_FAN_MODE_DEVICE_TO_HA = {
     0:   "off",
     1:   "low",
-    2:   "high",
-    65:  "low",
-    66:  "high",
+    2:   "medium",
+    3:   "high",
+    65:  "cycled_low",
+    66:  "cycled_medium",
+    67:  "cycled_high",
     128: "auto",
 }
 

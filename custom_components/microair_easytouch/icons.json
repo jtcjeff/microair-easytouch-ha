@@ -1,0 +1,30 @@
+{
+  "entity": {
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "fan_mode": {
+            "state": {
+              "off": "mdi:fan-off",
+              "low": "mdi:fan-speed-1",
+              "medium": "mdi:fan-speed-2",
+              "high": "mdi:fan-speed-3",
+              "cycled_low": "mdi:fan-clock",
+              "cycled_medium": "mdi:fan-clock",
+              "cycled_high": "mdi:fan-clock",
+              "auto": "mdi:fan-auto"
+            }
+          },
+          "preset_mode": {
+            "state": {
+              "gas": "mdi:fire",
+              "heat_pump": "mdi:heat-pump",
+              "auto_gas": "mdi:autorenew",
+              "auto_heat_pump": "mdi:heat-pump-outline"
+            }
+          }
+        }
+      }
+    }
+  }
+}

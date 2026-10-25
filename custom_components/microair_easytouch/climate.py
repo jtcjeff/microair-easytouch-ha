@@ -18,6 +18,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    BLE_EQUIPMENT_MODE_LABELS,
     CONF_CONNECTION_TYPE,
     CONF_IP_ADDRESS,
     CONF_MAC_ADDRESS,
@@ -50,9 +51,13 @@ async def async_setup_entry(
         else entry.data.get(CONF_MAC_ADDRESS)
     )
 
+    # BLE devices may expose sparse physical zone IDs (for example 0 and 2,
+    # which the thermostat displays as zones 1 and 3).  Use the IDs returned
+    # by the first status poll instead of manufacturing an unused middle zone.
+    zones = sorted((coordinator.data or {}).keys()) or list(range(zone_count))
     entities = [
         MicroAirClimate(coordinator, entry, device_id, conn_type, zone)
-        for zone in range(zone_count)
+        for zone in zones
     ]
     async_add_entities(entities)
 
@@ -61,6 +66,7 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
     """Climate entity for a single zone, backed by either coordinator."""
 
     _attr_has_entity_name = True
+    _attr_translation_key = "thermostat"
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
     _attr_target_temperature_step = TEMP_STEP
     _attr_min_temp = TEMP_MIN
@@ -70,6 +76,7 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
         HVACMode.OFF,
         HVACMode.COOL,
         HVACMode.HEAT,
+        HVACMode.HEAT_COOL,
         HVACMode.AUTO,
         HVACMode.DRY,
         HVACMode.FAN_ONLY,
@@ -109,13 +116,16 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def supported_features(self) -> ClimateEntityFeature:
-        return (
+        features = (
             ClimateEntityFeature.TARGET_TEMPERATURE
             | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
             | ClimateEntityFeature.FAN_MODE
             | ClimateEntityFeature.TURN_ON
             | ClimateEntityFeature.TURN_OFF
         )
+        if isinstance(self.coordinator, MicroAirBLECoordinator):
+            features |= ClimateEntityFeature.PRESET_MODE
+        return features
 
     @property
     def available(self) -> bool:
@@ -172,6 +182,20 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
         return zd.available_fan_modes if zd else ["off", "low", "high", "auto"]
 
     @property
+    def preset_modes(self) -> list[str] | None:
+        """Expose EasyTouch equipment selection as a climate preset list."""
+        if not isinstance(self.coordinator, MicroAirBLECoordinator):
+            return None
+        return list(BLE_EQUIPMENT_MODE_LABELS)
+
+    @property
+    def preset_mode(self) -> str | None:
+        if not isinstance(self.coordinator, MicroAirBLECoordinator):
+            return None
+        zd = self._zone_data
+        return zd.equipment_mode if zd else None
+
+    @property
     def icon(self) -> str:
         icons = {
             HVACMode.OFF:      "mdi:power",
@@ -186,10 +210,22 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        attrs: dict[str, Any] = {"zone": self._zone, "connection_type": self._conn_type}
+        attrs: dict[str, Any] = {
+            # The protocol uses zero-based IDs, while the thermostat/app show
+            # physical zones as 1-based numbers (this unit exposes zones 1 and 3).
+            "zone": self._zone + 1,
+            "protocol_zone": self._zone,
+            "connection_type": self._conn_type,
+        }
         zd = self._zone_data
         if zd:
+            if zd.system_power is not None:
+                attrs["system_power"] = zd.system_power
             attrs["fan_state"] = zd.fan_state
+            if zd.outside_temp is not None:
+                attrs["outside_temperature"] = zd.outside_temp
+            if zd.equipment_mode is not None:
+                attrs["equipment_mode"] = zd.equipment_mode
             if zd.line_voltage is not None:
                 attrs["line_voltage"] = zd.line_voltage
         return attrs
@@ -230,4 +266,12 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
         else:
             await self.coordinator.async_set_fan_mode(
                 fan_mode, zone=self._zone, hvac_mode=self.hvac_mode
+            )
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        if not isinstance(self.coordinator, MicroAirBLECoordinator):
+            return
+        if preset_mode in BLE_EQUIPMENT_MODE_LABELS:
+            await self.coordinator.async_set_equipment_mode(
+                preset_mode, zone=self._zone
             )

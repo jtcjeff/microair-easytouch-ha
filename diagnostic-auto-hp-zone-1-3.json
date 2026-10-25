@@ -1,0 +1,30 @@
+{
+  "description": "Sanitized EasyTouch 350-series Auto HP capture",
+  "source": "BLE FF01 Get Status response",
+  "device_mode_text": "Cool/Heat Pump",
+  "zones": {
+    "0": {
+      "physical_zone": 1,
+      "status_array": [70, 72, 69, 72, 72, 45, 0, 66, 128, 128, 10, 0, 69, 49, 0, 37],
+      "meaningful_fields": {
+        "auto_heat_setpoint": 70,
+        "auto_cool_setpoint": 72,
+        "mode_number": 10,
+        "temperature": 69,
+        "current_mode_number": 37
+      }
+    },
+    "2": {
+      "physical_zone": 3,
+      "status_array": [65, 70, 71, 72, 72, 45, 1, 66, 128, 128, 10, 0, 68, 50, 0, 0],
+      "meaningful_fields": {
+        "auto_heat_setpoint": 65,
+        "auto_cool_setpoint": 70,
+        "mode_number": 10,
+        "temperature": 68,
+        "current_mode_number": 0
+      }
+    }
+  },
+  "prm": [0, 15, 55, 80]
+}

@@ -51,7 +51,24 @@
   "entity": {
     "climate": {
       "thermostat": {
-        "name": "Thermostat"
+        "name": "Thermostat",
+        "state_attributes": {
+          "fan_mode": {
+            "state": {
+              "cycled_low": "Cycled Low",
+              "cycled_medium": "Cycled Medium",
+              "cycled_high": "Cycled High"
+            }
+          },
+          "preset_mode": {
+            "state": {
+              "gas": "Gas",
+              "heat_pump": "Heat Pump",
+              "auto_gas": "Auto Gas",
+              "auto_heat_pump": "Auto Heat Pump"
+            }
+          }
+        }
       }
     },
     "sensor": {

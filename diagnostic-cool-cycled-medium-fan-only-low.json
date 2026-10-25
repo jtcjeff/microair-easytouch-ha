@@ -1,0 +1,50 @@
+{
+  "description": "Sanitized EasyTouch captures after mode changes",
+  "captures": [
+    {
+      "label": "Zone 1 Cool, 69F, Cycled Medium",
+      "official_status": {
+        "zone1": {
+          "mode": "Cool",
+          "CSP": 69,
+          "state": "Cooling"
+        },
+        "zone3": {
+          "mode": "Cool/Heat Pump",
+          "state": "Standby"
+        }
+      },
+      "z_sts": {
+        "0": [70, 72, 69, 72, 72, 45, 0, 66, 128, 128, 2, 0, 70, 52, 0, 35],
+        "2": [65, 70, 71, 72, 72, 45, 1, 66, 128, 128, 10, 0, 68, 51, 0, 0]
+      },
+      "confirmed_fields": {
+        "zone1_mode_number": 2,
+        "zone1_cool_setpoint": 69,
+        "zone1_cool_fan_value": 66,
+        "zone1_current_mode_number": 35
+      }
+    },
+    {
+      "label": "Zone 3 Fan Only, Manual Low",
+      "official_status": {
+        "zone1": {
+          "mode": "Cool",
+          "CSP": 69
+        },
+        "zone3": {
+          "mode": "Fan",
+          "state": "Standby"
+        }
+      },
+      "z_sts": {
+        "0": [70, 72, 69, 72, 72, 45, 0, 66, 128, 128, 2, 0, 70, 52, 0, 97],
+        "2": [65, 70, 71, 72, 72, 45, 1, 66, 128, 128, 1, 0, 68, 51, 0, 0]
+      },
+      "confirmed_fields": {
+        "zone3_mode_number": 1,
+        "zone3_fan_only_value": 1
+      }
+    }
+  ]
+}

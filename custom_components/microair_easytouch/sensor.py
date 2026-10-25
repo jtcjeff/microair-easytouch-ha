@@ -21,6 +21,7 @@ from .const import (
     CONF_CONNECTION_TYPE,
     CONF_IP_ADDRESS,
     CONF_MAC_ADDRESS,
+    CONN_TYPE_BLE,
     CONN_TYPE_WIFI,
     DOMAIN,
 )
@@ -42,6 +43,15 @@ SENSOR_DESCRIPTIONS: tuple[MicroAirSensorDescription, ...] = (
         icon="mdi:thermometer",
         value_fn=lambda d: d.current_temp,
     ),
+    MicroAirSensorDescription(
+        key="outside_temperature",
+        name="Outside Temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        icon="mdi:weather-partly-cloudy",
+        value_fn=lambda d: d.outside_temp,
+    ),
 )
 
 
@@ -61,10 +71,17 @@ async def async_setup_entry(
         else entry.data.get(CONF_MAC_ADDRESS)
     )
 
+    # Preserve sparse physical zone IDs returned by the thermostat.
+    zones = sorted((coordinator.data or {}).keys()) or list(range(zone_count))
+    descriptions = (
+        SENSOR_DESCRIPTIONS
+        if conn_type == CONN_TYPE_BLE
+        else (SENSOR_DESCRIPTIONS[0],)
+    )
     entities = [
         MicroAirSensor(coordinator, entry, device_id, description, zone)
-        for zone in range(zone_count)
-        for description in SENSOR_DESCRIPTIONS
+        for zone in zones
+        for description in descriptions
     ]
     async_add_entities(entities)
 

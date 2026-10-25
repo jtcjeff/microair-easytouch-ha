@@ -9,9 +9,10 @@ A full-featured Home Assistant custom integration for **Micro-Air EasyTouch RV t
 ## Features
 
 - **WiFi and Bluetooth** — choose the connection method that works best for your setup
-- **Multi-zone support** — up to 3 independently controlled zones
-- **Full HVAC mode control** — Off, Cool, Heat, Auto, Dry, Fan Only
-- **Fan speed control** — Off, Low, High, Auto
+- **Multi-zone support** — up to 3 independently controlled zones, including sparse protocol zone IDs such as physical zones 1 and 3
+- **Full HVAC mode control** — Off, Cool, Heat, Auto, Heat/Cool, Dry, Fan Only
+- **Equipment mode control** — Gas, Heat Pump, Auto Gas, Auto Heat Pump (Bluetooth)
+- **Fan speed control** — Off, Low, Medium, High, Cycled Low/Medium/High, Full Auto
 - **HVAC action reporting** — know when the unit is actually Heating, Cooling, or Idle
 - **Temperature sensors** — per-zone current temperature
 - **Reboot button** — (Bluetooth only) remotely restart the thermostat
@@ -68,6 +69,11 @@ A full-featured Home Assistant custom integration for **Micro-Air EasyTouch RV t
 - Enter your Micro-Air account email and password if prompted — **leave both blank** if your thermostat does not require credentials
 - Enter the number of zones (1–3)
 
+For a Dometic CCC2 3314082 / Micro-Air 350-series thermostat, enter the number of
+configured zone slots reported by the thermostat. The integration also reads the
+actual protocol zone IDs, so a system with physical zones 1 and 3 can be configured
+with two zones without creating a false Zone 2.
+
 > **Important for Bluetooth:** The EasyTouch thermostat only allows one BLE connection at a time. Close the EasyTouch mobile app completely before and during setup, and avoid using the app while HA is connected.
 
 ---
@@ -82,7 +88,13 @@ For each zone the integration creates:
 | Zone N Temperature | `sensor` | Current temperature reading |
 | Reboot | `button` | Restart the thermostat *(Bluetooth only)* |
 
-Zones are named **Zone 1**, **Zone 2**, **Zone 3** — you can rename them in HA to match your RV layout (e.g. "Living Area", "Bedroom").
+Zones are named from their physical protocol IDs (for example, **Zone 1** and
+**Zone 3**) — you can rename them in HA to match your RV layout (e.g. "Living
+Area", "Bedroom").
+
+For the tested black Micro-Air **350-series** thermostat paired with a Dometic
+CCC2 **3314082**, the physical zones were Zone 1 (living room) and Zone 3
+(bedroom); there was no physical Zone 2.
 
 ---
 
@@ -143,7 +155,7 @@ Zones are named **Zone 1**, **Zone 2**, **Zone 3** — you can rename them in HA
 - Auth write: `0000DD01` characteristic
 - Command write: `0000EE01` characteristic (JSON)
 - Response read/notify: `0000FF01` characteristic (JSON)
-- Response format: `{"Z_sts": {"0": [...], "1": [...], "2": [...]}, "PRM": [...], "SN": "..."}`
+- Response format: `{"Z_sts": {"0": [...], "2": [...]}, "PRM": [...], "SN": "..."}` (zone keys are physical protocol IDs and may be sparse)
 
 ---
 

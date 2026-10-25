@@ -1,0 +1,106 @@
+{
+  "description": "Status-point observability audit for the EasyTouch BLE captures",
+  "device": "EasyTouch",
+  "firmware": "1.0.7.0",
+  "observed_protocol": {
+    "status_sources": ["BB01 statusOnly", "FF01 Get Status response"],
+    "bb01_global_power_field": "PWR",
+    "ff01_top_level_keys": [
+      "Type", "RT", "TT", "SN", "REV", "alertLL", "alertUL", "CI",
+      "Z_sts", "PRM", "hA"
+    ],
+    "zone_keys": ["0", "2"],
+    "zone_status_array_length": 16,
+    "prm": {
+      "values_seen": [[0, 15, 43, 80], [0, 15, 55, 80], [0, 15, 56, 80], [0, 15, 57, 80], [2, 15, 57, 80]],
+      "meaning": "Not decoded yet; these values may contain configuration or status flags, so the named indicators cannot be ruled out until PRM is correlated with additional captures"
+    },
+    "zone_status_array_indices": {
+      "0": "auto heat setpoint",
+      "1": "auto cool setpoint",
+      "2": "cool setpoint",
+      "3": "heat setpoint",
+      "4": "dry setpoint",
+      "6": "fan-only setting",
+      "7": "cool fan setting",
+      "9": "auto/heat-pump fan setting",
+      "10": "equipment/mode number",
+      "12": "ambient temperature",
+      "15": "current operating mode number"
+    }
+  },
+  "points": {
+    "outside_air_sensor": {
+      "status": "observed_in_prm",
+      "zone1": "The 10:47 app value was 57°F and PRM[2] was 57",
+      "zone3": "The same PRM[2] value is available while zone 3 is reported",
+      "implementation": "The working fork stores PRM[2] as outside_temp and exposes it as the climate attribute outside_temperature",
+      "confidence": "confirmed by app/PRM correlations at 57°F and 58°F"
+    },
+    "auto_gas_fan_field": {
+      "status": "observed",
+      "finding": "Auto Gas uses the auto/heat-pump fan field at zone-array index 9; the gas heat-fan field at index 11 remained 0 during the Manual Low test",
+      "stable_manual_low_value": 1,
+      "transient_value_seen_after_change": 65,
+      "current_mode_number": 36,
+      "current_mode_meaning": "heating"
+    },
+    "fan_value_matrix": {
+      "status": "confirmed",
+      "full_auto": 128,
+      "cycled_low": 65,
+      "cycled_medium": 66,
+      "cycled_high": 67,
+      "manual_low": 1,
+      "manual_medium": 2,
+      "manual_high": 3,
+      "applies_to": ["Auto HP", "Auto Gas"]
+    },
+    "cycle_delay": {
+      "status": "partially_observed",
+      "zone1": {
+        "current_mode_number": 97,
+        "bb01_state_text": "Cycle Delay"
+      },
+      "zone3": "No Cycle Delay event observed in this capture session",
+      "implementation": "The working fork maps current-mode 97 internally to cycle_delay, but does not yet expose it as a dedicated HA attribute or binary sensor"
+    },
+    "global_power": {
+      "status": "observed",
+      "bb01_power_off_capture": true,
+      "observed_effect": "PWR changed from Off to On while the zone arrays remained available",
+      "implementation": "The current parser uses PRM containing 7 as an indirect action-off signal but does not retain the explicit BB01 PWR value"
+    },
+    "per_zone_power": {
+      "status": "observed",
+      "finding": "Zone 1 can be Off while global PWR remains On and Zone 3 remains in Auto HP",
+      "zone1_mode_number": 0,
+      "zone1_current_mode_number": 32,
+      "candidate_prm_flag": "PRM[0] changed from 0 to 2; not decoded yet",
+      "global_power_off_result": "Both zones reported mode 0 while BB01 PWR was Off",
+      "power_restore_result": "BB01 PWR returned On while both zones remained mode 0",
+      "zone3_individual_off": "Confirmed: Zone 3 changed from mode 2 Cool to mode 0 Off while global power remained On"
+    },
+    "deferred_information_only": {
+      "scope_decision": "Electric Heat Override, Defrost, and remote-sensor behavior are deferred to naturally occurring or future cold-weather observations; they are informational and not required control points"
+    },
+    "electric_heat_override": {
+      "status": "not_observed",
+      "zone1": "No named field or active event in captured BB01/FF01 data",
+      "zone3": "No named field or active event in captured BB01/FF01 data",
+      "next_step": "Capture a status response with this indicator active, if the thermostat can safely be placed in that state"
+    },
+    "defrost": {
+      "status": "not_observed",
+      "zone1": "No named field or active event in captured BB01/FF01 data",
+      "zone3": "No named field or active event in captured BB01/FF01 data",
+      "next_step": "Capture a status response during a naturally occurring defrost event; do not force one solely for testing"
+    },
+    "remote_indoor_sensor": {
+      "status": "not_observed_as_a_source_flag",
+      "zone1": "Ambient temperature is present, but no field identifies whether it comes from the thermostat or a remote indoor sensor",
+      "zone3": "Ambient temperature is present, but no field identifies whether it comes from the thermostat or a remote indoor sensor",
+      "next_step": "Compare a status capture with the remote indoor sensor enabled and disabled, if the app/configuration permits that safely"
+    }
+  }
+}

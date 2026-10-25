@@ -1,0 +1,314 @@
+{
+  "description": "Sanitized EasyTouch equipment-mode captures",
+  "device": "EasyTouch 350-series",
+  "firmware": "1.0.7.0",
+  "source": "BLE FF01 Get Status response correlated with the official Android app",
+  "captures": [
+    {
+      "label": "Zone 1 Heat Pump only, heating, Full Auto fan",
+      "official_status": {
+        "zone1": {
+          "mode": "Heat Pump",
+          "CSP": 69,
+          "HSP": 72,
+          "state": "Heating",
+          "fan": "Full Auto"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 3, 128, 128, 5, 0, 69, 51, 0, 37],
+      "confirmed_fields": {
+        "mode_number": 5,
+        "heat_setpoint": 72,
+        "auto_fan_value": 128,
+        "current_mode_number": 37
+      }
+    },
+    {
+      "label": "Zone 1 Heat Pump only, heating, Cycled Medium fan",
+      "official_status": {
+        "zone1": {
+          "mode": "Heat Pump",
+          "CSP": 69,
+          "HSP": 72,
+          "state": "Heating",
+          "fan": "Cycled Medium"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 3, 66, 128, 5, 0, 69, 51, 0, 37],
+      "confirmed_fields": {
+        "mode_number": 5,
+        "heat_setpoint": 72,
+        "auto_fan_value": 66,
+        "current_mode_number": 37
+      }
+    },
+    {
+      "label": "Zone 3 Gas/Furnace",
+      "official_status": {
+        "zone3": {
+          "mode": "Furnace",
+          "state": "Heating"
+        }
+      },
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 0, 66, 128, 128, 4, 0, 68, 51, 0, 4],
+      "confirmed_fields": {
+        "mode_number": 4,
+        "current_mode_number": 4
+      }
+    },
+    {
+      "label": "Auto HP",
+      "official_status": {
+        "zone1": {
+          "mode": "Cool/Heat Pump",
+          "state": "Cooling or Heating"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 66, 128, 128, 10, 0, 69, 49, 0, 37],
+      "confirmed_fields": {
+        "mode_number": 10,
+        "independent_heat_and_cool_setpoints": true
+      }
+    },
+    {
+      "label": "Global power off during transition",
+      "official_status": {
+        "power": "Off",
+        "zone1": {
+          "mode": "Heat Pump",
+          "state": "Operating"
+        },
+        "zone3": {
+          "mode": "Off",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 3, 66, 128, 5, 0, 69, 50, 0, 33],
+      "prm": [0, 7, 57, 80],
+      "confirmed_fields": {
+        "bb01_power": "Off",
+        "prm_contains": 7,
+        "current_mode_number": 33
+      }
+    },
+    {
+      "label": "Zone 1 Auto Gas, Full Auto fan",
+      "official_status": {
+        "power": "On",
+        "zone1": {
+          "mode": "Cool/Furnace",
+          "CSP": 72,
+          "HSP": 70,
+          "inside": 69,
+          "outside": 57,
+          "fan": "Full Auto",
+          "state": "Cycle Delay"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 3, 66, 128, 11, 0, 69, 50, 0, 97],
+      "prm": [0, 15, 57, 80],
+      "confirmed_fields": {
+        "mode_number": 11,
+        "auto_heat_setpoint": 70,
+        "auto_cool_setpoint": 72,
+        "auto_fan_value": 128,
+        "current_mode_number": 97
+      }
+    },
+    {
+      "label": "Zone 1 Auto Gas, Manual Low fan, first poll",
+      "official_status": {
+        "power": "On",
+        "zone1": {
+          "mode": "Cool/Furnace",
+          "CSP": 72,
+          "HSP": 70,
+          "inside": 69,
+          "outside": 57,
+          "fan": "Manual Low",
+          "state": "Heating"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 3, 65, 128, 11, 0, 69, 51, 0, 36],
+      "prm": [0, 15, 57, 80],
+      "confirmed_fields": {
+        "mode_number": 11,
+        "auto_fan_value": 65,
+        "heat_fan_value": 0,
+        "current_mode_number": 36,
+        "note": "First poll after the fan change; the following poll reported auto_fan_value 1"
+      }
+    },
+    {
+      "label": "Zone 1 Auto Gas, Manual Low fan, stable poll",
+      "official_status": {
+        "power": "On",
+        "zone1": {
+          "mode": "Cool/Furnace",
+          "CSP": 72,
+          "HSP": 70,
+          "inside": 69,
+          "outside": 57,
+          "fan": "Manual Low",
+          "state": "Heating"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 3, 1, 128, 11, 0, 69, 52, 0, 36],
+      "prm": [0, 15, 57, 80],
+      "confirmed_fields": {
+        "mode_number": 11,
+        "auto_fan_value": 1,
+        "heat_fan_value": 0,
+        "current_mode_number": 36
+      }
+    },
+    {
+      "label": "Zone 1 Auto HP, Manual fan, heat setpoint before adjustment",
+      "official_status": {
+        "power": "On",
+        "zone1": {
+          "mode": "Cool/Heat Pump",
+          "CSP": 72,
+          "HSP": 70,
+          "inside": 69,
+          "outside": 57,
+          "fan": "Manual",
+          "state": "Heating"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 3, 66, 1, 10, 0, 69, 52, 0, 36],
+      "prm": [0, 15, 57, 80],
+      "confirmed_fields": {
+        "mode_number": 10,
+        "auto_heat_setpoint": 70,
+        "auto_cool_setpoint": 72,
+        "auto_fan_value": 1,
+        "current_mode_number": 36
+      }
+    },
+    {
+      "label": "Zone 1 Auto HP, Manual fan, heat setpoint 69",
+      "official_status": {
+        "power": "On",
+        "zone1": {
+          "mode": "Cool/Heat Pump",
+          "CSP": 72,
+          "HSP": 69,
+          "inside": 69,
+          "outside": 57,
+          "fan": "Manual",
+          "state": "Heating"
+        }
+      },
+      "z_sts_zone1": [69, 72, 69, 72, 72, 45, 0, 3, 66, 1, 10, 0, 69, 52, 0, 37],
+      "prm": [0, 15, 57, 80],
+      "confirmed_fields": {
+        "mode_number": 10,
+        "auto_heat_setpoint": 69,
+        "auto_cool_setpoint": 72,
+        "auto_fan_value": 1,
+        "current_mode_number": 37
+      }
+    },
+    {
+      "label": "Zone 1 Auto HP fan matrix",
+      "mode_number": 10,
+      "fan_field": "auto_fan_value",
+      "observed_values": {
+        "full_auto": 128,
+        "cycled_low": 65,
+        "cycled_medium": 66,
+        "cycled_high": 67,
+        "manual_low": 1,
+        "manual_medium": 2,
+        "manual_high": 3
+      }
+    },
+    {
+      "label": "Zone 1 Auto Gas fan matrix",
+      "mode_number": 11,
+      "fan_field": "auto_fan_value",
+      "observed_values": {
+        "full_auto": 128,
+        "cycled_low": 65,
+        "cycled_medium": 66,
+        "cycled_high": 67,
+        "manual_low": 1,
+        "manual_medium": 2,
+        "manual_high": 3
+      },
+      "heat_fan_value_during_test": 0
+    },
+    {
+      "label": "Zone 1 individually Off while Zone 3 remains enabled",
+      "official_status": {
+        "power": "On",
+        "zone1": {
+          "mode": "Off",
+          "state": "Standby"
+        },
+        "zone3": {
+          "mode": "Cool/Heat Pump",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone1": [69, 72, 69, 72, 72, 45, 0, 3, 66, 67, 0, 0, 70, 56, 0, 32],
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 0, 66, 128, 128, 10, 0, 68, 53, 0, 0],
+      "prm": [2, 15, 58, 80],
+      "confirmed_fields": {
+        "global_power": "On",
+        "zone1_mode_number": 0,
+        "zone1_current_mode_number": 32,
+        "zone3_mode_number": 10,
+        "note": "PRM[0] changed from 0 to 2; meaning is not decoded yet"
+      }
+    },
+    {
+      "label": "Global power Off after Zone 3 Off command",
+      "official_status": {
+        "power": "Off",
+        "zone1": {
+          "mode": "Off",
+          "state": "Standby"
+        },
+        "zone3": {
+          "mode": "Off",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone1": [69, 72, 69, 72, 72, 45, 0, 3, 66, 67, 0, 0, 70, 57, 0, 32],
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 0, 66, 128, 128, 0, 0, 68, 55, 0, 0],
+      "prm": [2, 7, 58, 80],
+      "confirmed_fields": {
+        "bb01_power": "Off",
+        "zone1_mode_number": 0,
+        "zone3_mode_number": 0,
+        "prm_contains": 7,
+        "note": "Zone 3 was still mode 10 in the immediately preceding polls; its independent Off transition was not isolated before global power-off"
+      }
+    },
+    {
+      "label": "Power restored with both zones remaining Off",
+      "official_status": {
+        "power": "On",
+        "zone1": {
+          "mode": "Off",
+          "state": "Standby"
+        },
+        "zone3": {
+          "mode": "Off",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone1": [69, 72, 69, 72, 72, 45, 0, 3, 66, 67, 0, 0, 70, 58, 0, 32],
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 0, 66, 128, 128, 0, 0, 68, 56, 0, 0],
+      "prm": [0, 15, 58, 80],
+      "confirmed_fields": {
+        "bb01_power": "On",
+        "zone1_mode_number": 0,
+        "zone3_mode_number": 0,
+        "outside_temperature": 58
+      }
+    }
+  ]
+}

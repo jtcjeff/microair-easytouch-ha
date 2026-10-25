@@ -1,0 +1,170 @@
+{
+  "description": "Sanitized EasyTouch fan-code and Gas/Furnace captures",
+  "captures": [
+    {
+      "label": "Zone 1 Cool, Cycled High",
+      "official_status": {
+        "zone1": {
+          "mode": "Cool",
+          "CSP": 69,
+          "state": "Cooling"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 67, 128, 128, 2, 0, 70, 50, 0, 35],
+      "confirmed_fields": {
+        "cool_fan_value": 67,
+        "current_mode_number": 35
+      }
+    },
+    {
+      "label": "Zone 1 Cool, Manual High",
+      "official_status": {
+        "zone1": {
+          "mode": "Cool",
+          "CSP": 69,
+          "state": "Cooling"
+        }
+      },
+      "z_sts_zone1": [70, 72, 69, 72, 72, 45, 0, 3, 128, 128, 2, 0, 69, 50, 0, 35],
+      "confirmed_fields": {
+        "cool_fan_value": 3,
+        "current_mode_number": 35
+      }
+    },
+    {
+      "label": "Zone 3 Fan Only, Manual Medium",
+      "official_status": {
+        "zone3": {
+          "mode": "Fan",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 2, 66, 128, 128, 1, 0, 68, 51, 0, 0],
+      "confirmed_fields": {
+        "fan_only_value": 2
+      }
+    },
+    {
+      "label": "Zone 3 Fan Only, Manual High",
+      "official_status": {
+        "zone3": {
+          "mode": "Fan",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 3, 66, 128, 128, 1, 0, 68, 51, 0, 0],
+      "confirmed_fields": {
+        "fan_only_value": 3
+      }
+    },
+    {
+      "label": "Zone 3 Fan Only, Fan Off",
+      "official_status": {
+        "zone3": {
+          "mode": "Fan",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 0, 66, 128, 128, 1, 0, 68, 51, 0, 0],
+      "confirmed_fields": {
+        "fan_only_value": 0
+      }
+    },
+    {
+      "label": "Zone 3 Gas/Furnace",
+      "official_status": {
+        "zone3": {
+          "mode": "Furnace",
+          "state": "Heating"
+        }
+      },
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 0, 66, 128, 128, 4, 0, 68, 51, 0, 4],
+      "confirmed_fields": {
+        "mode_number": 4,
+        "fan_only_value": 0,
+        "current_mode_number": 4
+      }
+    },
+    {
+      "label": "Zone 1 Fan Only, Fan Off after Auto Gas fan matrix",
+      "official_status": {
+        "zone1": {
+          "mode": "Fan",
+          "state": "Standby",
+          "fan": "Off"
+        }
+      },
+      "z_sts_zone1": [69, 72, 69, 72, 72, 45, 0, 3, 66, 67, 1, 0, 71, 55, 0, 32],
+      "confirmed_fields": {
+        "mode_number": 1,
+        "fan_only_value": 0,
+        "inactive_previous_auto_fan_value": 67,
+        "current_mode_number": 32
+      }
+    },
+    {
+      "label": "Zone 3 Cool, Cycled Medium",
+      "official_status": {
+        "zone3": {
+          "mode": "Cool",
+          "CSP": 71,
+          "inside": 68,
+          "fan": "Cycled Medium",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 0, 66, 128, 128, 2, 0, 68, 57, 0, 0],
+      "confirmed_fields": {
+        "physical_zone": 3,
+        "mode_number": 2,
+        "cool_setpoint": 71,
+        "cool_fan_value": 66,
+        "current_mode_number": 0
+      }
+    },
+    {
+      "label": "Zone 3 individually Off before global power-off",
+      "official_status": {
+        "zone1": {
+          "mode": "Off",
+          "state": "Standby"
+        },
+        "zone3": {
+          "mode": "Off",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 0, 66, 128, 128, 0, 0, 68, 57, 0, 0],
+      "prm": [2, 15, 58, 80],
+      "confirmed_fields": {
+        "physical_zone": 3,
+        "mode_number": 0,
+        "current_mode_number": 0,
+        "note": "This poll preceded the later global PWR Off capture"
+      }
+    },
+    {
+      "label": "Global power Off after confirmed Zone 3 individual Off",
+      "official_status": {
+        "power": "Off",
+        "zone1": {
+          "mode": "Off",
+          "state": "Standby"
+        },
+        "zone3": {
+          "mode": "Off",
+          "state": "Standby"
+        }
+      },
+      "z_sts_zone1": [69, 72, 69, 72, 72, 45, 0, 3, 66, 67, 0, 0, 70, 60, 0, 32],
+      "z_sts_zone3": [65, 70, 71, 72, 72, 45, 0, 66, 128, 128, 0, 0, 68, 57, 0, 0],
+      "prm": [2, 7, 59, 80],
+      "confirmed_fields": {
+        "bb01_power": "Off",
+        "zone1_mode_number": 0,
+        "zone3_mode_number": 0,
+        "prm_contains": 7
+      }
+    }
+  ]
+}

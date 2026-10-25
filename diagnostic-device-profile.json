@@ -1,0 +1,9 @@
+{
+  "device_type_reported_by_protocol": "EasyTouch",
+  "firmware_revision": "1.0.7.0",
+  "hardware_model_number": null,
+  "hardware_model_note": "The captured BLE status identifies the device as EasyTouch but does not expose a separate hardware model number.",
+  "serial_number": "redacted",
+  "observed_physical_zones": [1, 3],
+  "capture_source": "BLE FF01 Get Status response"
+}

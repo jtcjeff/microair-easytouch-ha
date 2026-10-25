@@ -61,12 +61,18 @@ class MicroAirData:
     hvac_action: HVACAction = HVACAction.OFF
 
     current_temp: float | None = None
+    outside_temp: float | None = None
+    system_power: bool | None = None
     setpoint: float | None = None          # heat/cool/dry setpoint
     setpoint_high: float | None = None     # auto-mode cool setpoint
     setpoint_low: float | None = None      # auto-mode heat setpoint
 
     fan_mode: str = "auto"
     fan_state: str = "off"
+
+    # EasyTouch equipment source.  This is intentionally separate from the
+    # generic HA HVAC mode because both Gas and Heat Pump report as "heat".
+    equipment_mode: str | None = None
 
     humidity: float | None = None
     line_voltage: float | None = None
@@ -75,7 +81,8 @@ class MicroAirData:
     network_id: str = ""
 
     available_fan_modes: list[str] = field(default_factory=lambda: [
-        "off", "low", "medium", "high", "auto",
+        "off", "low", "medium", "high",
+        "cycled_low", "cycled_medium", "cycled_high", "auto",
     ])
 
 
@@ -517,10 +524,10 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         sending a Get Status command via EE01 and reading the response from FF01.
         """
         # ── Try BB01 (statusOnly) — direct read, no command needed ───────────
-        raw_status = await self._read_status_only(client)
-        if raw_status is not None:
-            _LOGGER.debug("BB01 status: %s", raw_status)
-            return self._parse_all_zones(raw_status)
+        bb01_status = await self._read_status_only(client)
+        if bb01_status is not None and "Z_sts" in bb01_status:
+            _LOGGER.debug("BB01 status: %s", bb01_status)
+            return self._parse_all_zones(bb01_status)
 
         # ── Fall back: Get Status via EE01 / FF01 ────────────────────────────
         chunks: list[bytes] = []
@@ -554,6 +561,11 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         if raw_status is None:
             return {}
 
+        # FF01 does not include the global PWR field on this firmware, while
+        # BB01 does. Preserve BB01's explicit value alongside FF01's arrays.
+        if bb01_status and "PWR" in bb01_status:
+            raw_status["PWR"] = bb01_status["PWR"]
+
         _LOGGER.debug("FF01 status: %s", raw_status)
         return self._parse_all_zones(raw_status)
 
@@ -573,11 +585,9 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
             text = bytes(raw).decode("utf-8", errors="replace").strip()
             _LOGGER.debug("BB01 raw: %r", text)
             parsed = json.loads(text)
-            # Only use this response if it contains zone status data
-            if "Z_sts" in parsed:
-                return parsed
-            _LOGGER.debug("BB01 response has no Z_sts — falling back to Get Status")
-            return None
+            if "Z_sts" not in parsed:
+                _LOGGER.debug("BB01 response has no Z_sts — falling back to Get Status")
+            return parsed
         except (asyncio.TimeoutError, json.JSONDecodeError):
             return None
         except Exception as exc:
@@ -633,7 +643,10 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         if self._email:
             command["EM"] = self._email
         cmd_bytes = json.dumps(command).encode("utf-8")
-        _LOGGER.debug("→ %s", command)
+        _LOGGER.debug(
+            "→ %s",
+            {key: value for key, value in command.items() if key != "EM"},
+        )
 
         try:
             await asyncio.wait_for(
@@ -713,14 +726,21 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
     # ── State parsing ────────────────────────────────────────────────────────
 
     def _parse_all_zones(self, status: dict[str, Any]) -> ZoneData:
-        """Parse the Z_sts dict — keys are zone index strings "0", "1", "2"."""
+        """Parse every physical zone returned by Z_sts.
+
+        The configured zone count is a setup hint, not necessarily a contiguous
+        range of protocol IDs. Some EasyTouch systems expose physical zones 1
+        and 3 as protocol keys 0 and 2, with no protocol key 1.
+        """
         from .const import (
             BLE_IDX_AUTO_COOL_SP, BLE_IDX_AUTO_HEAT_SP,
             BLE_IDX_AUTO_FAN_MODE, BLE_IDX_COOL_FAN_MODE,
             BLE_IDX_COOL_SP, BLE_IDX_CURRENT_MODE, BLE_IDX_DRY_SP,
             BLE_IDX_FAN_ONLY_MODE, BLE_IDX_HEAT_FAN_MODE,
             BLE_IDX_HEAT_SP, BLE_IDX_MODE_NUM, BLE_IDX_TEMPERATURE,
-            BLE_CURRENT_MODE_MAP, BLE_MODE_NUM_TO_HA,
+            BLE_IDX_PRM_OUTSIDE_TEMP,
+            BLE_CURRENT_MODE_MAP, BLE_EQUIPMENT_MODE_NUM_TO_NAME,
+            BLE_MODE_NUM_TO_HA,
         )
 
         z_sts: dict[str, list] = status.get("Z_sts", {})
@@ -733,20 +753,32 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
             except ValueError:
                 continue
 
-            if zone >= self._zone_count:
-                continue
-
             zd = MicroAirData(zone=zone)
 
             try:
                 zd.current_temp = _safe(info, BLE_IDX_TEMPERATURE)
+                # PRM[2] tracks the outside-air temperature.  The 10:47
+                # capture reported 57°F in the app and PRM[2] was 57.
+                zd.outside_temp = _safe(param, BLE_IDX_PRM_OUTSIDE_TEMP)
+
+                power = status.get("PWR")
+                if power == "On":
+                    zd.system_power = True
+                elif power == "Off" or 7 in param:
+                    zd.system_power = False
 
                 mode_num = int(_safe(info, BLE_IDX_MODE_NUM) or 0)
+                zd.equipment_mode = BLE_EQUIPMENT_MODE_NUM_TO_NAME.get(mode_num)
                 ha_mode_str = BLE_MODE_NUM_TO_HA.get(mode_num, "off")
                 try:
-                    zd.hvac_mode = HVACMode(ha_mode_str)
+                    parsed_hvac_mode = HVACMode(ha_mode_str)
                 except ValueError:
-                    zd.hvac_mode = HVACMode.OFF
+                    parsed_hvac_mode = HVACMode.OFF
+                zd.hvac_mode = (
+                    HVACMode.OFF
+                    if zd.system_power is False
+                    else parsed_hvac_mode
+                )
 
                 # Setpoints
                 zd.setpoint_low  = _safe(info, BLE_IDX_AUTO_HEAT_SP)
@@ -765,14 +797,23 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
                 # Fan mode
                 if zd.hvac_mode == HVACMode.FAN_ONLY:
                     fan_num = int(_safe(info, BLE_IDX_FAN_ONLY_MODE) or 0)
-                    zd.available_fan_modes = ["off", "low", "high"]
+                    zd.available_fan_modes = ["off", "low", "medium", "high"]
+                    from .const import BLE_FAN_MODE_FAN_ONLY_DEVICE_TO_HA
+                    zd.fan_mode = BLE_FAN_MODE_FAN_ONLY_DEVICE_TO_HA.get(
+                        fan_num, "off"
+                    )
                 elif zd.hvac_mode == HVACMode.COOL:
                     fan_num = int(_safe(info, BLE_IDX_COOL_FAN_MODE) or 128)
+                elif mode_num == 5:
+                    # Heat Pump mode stores its active fan setting in the
+                    # auto-fan field, unlike Gas/Furnace heat mode.
+                    fan_num = int(_safe(info, BLE_IDX_AUTO_FAN_MODE) or 128)
                 elif zd.hvac_mode == HVACMode.HEAT:
                     fan_num = int(_safe(info, BLE_IDX_HEAT_FAN_MODE) or 128)
                 else:
                     fan_num = int(_safe(info, BLE_IDX_AUTO_FAN_MODE) or 128)
-                zd.fan_mode = BLE_FAN_MODE_DEVICE_TO_HA.get(fan_num, "auto")
+                if zd.hvac_mode != HVACMode.FAN_ONLY:
+                    zd.fan_mode = BLE_FAN_MODE_DEVICE_TO_HA.get(fan_num, "auto")
 
                 # HVAC action from current_mode_num
                 cur_num = int(_safe(info, BLE_IDX_CURRENT_MODE) or 0)
@@ -828,6 +869,26 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         if await self._send_command(command):
             await self.async_request_refresh()
 
+    async def async_set_equipment_mode(self, equipment_mode: str, zone: int = 0) -> None:
+        """Select Gas, Heat Pump, Auto Gas, or Auto HP for a BLE zone."""
+        from .const import BLE_EQUIPMENT_MODE_NAME_TO_DEVICE
+
+        device_mode = BLE_EQUIPMENT_MODE_NAME_TO_DEVICE.get(equipment_mode)
+        if device_mode is None:
+            _LOGGER.warning("Unknown equipment mode: %s", equipment_mode)
+            return
+        command = {
+            "Type": "Change",
+            "Zone": zone,
+            "Changes": {
+                "zone": zone,
+                "power": 1,
+                "mode": device_mode,
+            },
+        }
+        if await self._send_command(command):
+            await self.async_request_refresh()
+
     async def async_set_temperature(
         self,
         zone: int = 0,
@@ -869,11 +930,20 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
             changes = {"zone": zone, "fanOnly": fan_value}
         else:
             fan_value = BLE_FAN_MODES_FULL.get(fan_mode, 128)
-            fan_key = {
-                HVACMode.COOL: "coolFan",
-                HVACMode.HEAT: "heatFan",
-                HVACMode.AUTO: "autoFan",
-            }.get(current, "autoFan")
+            if (
+                current == HVACMode.HEAT
+                and zone_data
+                and zone_data.equipment_mode == "heat_pump"
+            ):
+                # Heat Pump-only mode uses the autoFan field even though HA
+                # represents its HVAC mode as generic HEAT.
+                fan_key = "autoFan"
+            else:
+                fan_key = {
+                    HVACMode.COOL: "coolFan",
+                    HVACMode.HEAT: "heatFan",
+                    HVACMode.AUTO: "autoFan",
+                }.get(current, "autoFan")
             changes = {"zone": zone, fan_key: fan_value}
 
         command = {"Type": "Change", "Zone": zone, "Changes": changes}
