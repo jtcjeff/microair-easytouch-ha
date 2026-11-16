@@ -91,7 +91,9 @@ Setting a zone's thermostat to **Off** turns off only that zone. To shut down th
 
 ### Heat sources (Bluetooth)
 
-At startup the integration asks each zone what equipment it has, and the thermostat entity only offers the modes that zone supports. The detected config is logged at INFO level (`Zone N config: ...`). If a zone reports both a furnace and a heat pump or heat strip, pick one with **Zone N Heat source**. Changing it while the zone is heating switches over right away; otherwise the choice is saved and used the next time the zone is set to Heat. If the thermostat doesn't report a zone's config, Heat uses the furnace, as before.
+At startup the integration asks each zone what equipment it has, and the thermostat entity only offers the modes that zone supports. The detected config is logged at INFO level (`Zone N config: ...`). If a zone reports both a furnace and a heat pump or heat strip, pick one with **Zone N Heat source**. Changing it while the zone is heating switches over right away; otherwise the choice is saved and used the next time the zone is set to Heat. If the thermostat's config can't be read, every zone offers Furnace, Heat pump and "Heat pump / heat strip" (Furnace is the default).
+
+The same choice is a **preset** on each zone's thermostat entity, so you can put it right on the dashboard card: edit the Thermostat card → **Features** → add **Preset modes**. It can also be set from automations with `climate.set_preset_mode`.
 
 Zones are named **Zone 1**, **Zone 2**, **Zone 3** — you can rename them in HA to match your RV layout (e.g. "Living Area", "Bedroom").
 

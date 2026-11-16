@@ -109,8 +109,11 @@ HEAT_SOURCE_LABELS = {
     "electric_heat": "Heat pump / heat strip",
     "both":          "Both heat sources",
 }
-# Used when the thermostat doesn't report its configuration
+# Used when the thermostat doesn't report its configuration: offer furnace
+# first (the default), then heat pump (mode 5) and electric heat (mode 7) —
+# boards differ in which number drives the heat pump.
 DEFAULT_HEAT_MODE = 4
+FALLBACK_HEAT_MODES = (4, 5, 7)
 
 # ── BLE response array indices (info = Z_sts["zone_key"]) ──────────────────
 BLE_IDX_AUTO_HEAT_SP   = 0

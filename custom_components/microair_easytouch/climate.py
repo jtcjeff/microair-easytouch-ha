@@ -26,7 +26,11 @@ from .const import (
     CONN_TYPE_WIFI,
     DOMAIN,
     HEAT_SOURCE_BY_MODE,
+    HEAT_SOURCE_LABELS,
+    MODE_BY_HEAT_SOURCE,
 )
+
+LABEL_TO_HEAT_SOURCE = {label: key for key, label in HEAT_SOURCE_LABELS.items()}
 from .coordinator import MicroAirBLECoordinator, MicroAirData, MicroAirWiFiCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -151,6 +155,46 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
         if 1 in zc.modes:
             modes.append(HVACMode.FAN_ONLY)
         return modes
+
+    # ── Heat source as a preset (shows on the thermostat card) ───────────────
+
+    def _heat_source_labels(self) -> list[str]:
+        if self._conn_type != CONN_TYPE_BLE:
+            return []
+        return [
+            HEAT_SOURCE_LABELS[HEAT_SOURCE_BY_MODE[m]]
+            for m in self.coordinator.available_heat_modes(self._zone)
+            if m in HEAT_SOURCE_BY_MODE
+        ]
+
+    @property
+    def supported_features(self) -> ClimateEntityFeature:
+        features = self._attr_supported_features
+        if len(self._heat_source_labels()) > 1:
+            features |= ClimateEntityFeature.PRESET_MODE
+        return features
+
+    @property
+    def preset_modes(self) -> list[str] | None:
+        labels = self._heat_source_labels()
+        return labels if len(labels) > 1 else None
+
+    @property
+    def preset_mode(self) -> str | None:
+        if not self.preset_modes:
+            return None
+        mode = self.coordinator.heat_mode_for(self._zone)
+        if mode not in HEAT_SOURCE_BY_MODE:
+            return None
+        return HEAT_SOURCE_LABELS[HEAT_SOURCE_BY_MODE[mode]]
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        source = LABEL_TO_HEAT_SOURCE.get(preset_mode)
+        if source is None or preset_mode not in (self.preset_modes or []):
+            raise ValueError(f"Unknown heat source: {preset_mode}")
+        await self.coordinator.async_set_heat_source(
+            self._zone, MODE_BY_HEAT_SOURCE[source]
+        )
 
     @property
     def min_temp(self) -> float:

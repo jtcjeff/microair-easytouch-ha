@@ -156,4 +156,24 @@ def test_misread_config_does_not_hide_modes(hass):
         assert c.zone_config(z) is None
         e = MicroAirClimate(c, MagicMock(title="t"), "id", CONN_TYPE_BLE, z)
         assert {HVACMode.COOL, HVACMode.HEAT, HVACMode.AUTO} <= set(e.hvac_modes)
-        assert c.available_heat_modes(z) == [4]
+        assert c.available_heat_modes(z) == [4, 5, 7]
+
+
+async def test_heat_source_preset_on_card(hass):
+    from homeassistant.components.climate import ClimateEntityFeature
+    c = ble(hass); with_status(c, 4, 2, 2)
+    e = MicroAirClimate(c, MagicMock(title="t"), "id", CONN_TYPE_BLE, 0)
+    # No config read → furnace, heat pump, electric heat all offered
+    assert e.supported_features & ClimateEntityFeature.PRESET_MODE
+    assert e.preset_modes == ["Furnace", "Heat pump", "Heat pump / heat strip"]
+    assert e.preset_mode == "Furnace"
+    await e.async_set_preset_mode("Heat pump")  # zone is heating → switches now
+    assert sent(c) == {"zone": 0, "power": 1, "mode": 5}
+    # Zone with one heat source → no preset
+    c.zone_configs[1] = parse_zone_config(1, {"CFG": {"MA": [2, 4]}})
+    e1 = MicroAirClimate(c, MagicMock(title="t"), "id", CONN_TYPE_BLE, 1)
+    assert e1.preset_modes is None
+    assert not e1.supported_features & ClimateEntityFeature.PRESET_MODE
+    # WiFi never has one
+    w = MicroAirClimate(MagicMock(data={}), MagicMock(title="t"), "ip", "wifi", 0)
+    assert w.preset_modes is None

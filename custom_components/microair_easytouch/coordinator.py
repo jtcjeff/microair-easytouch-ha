@@ -22,7 +22,7 @@ from .const import (
     BLE_FAN_MODE_DEVICE_TO_HA,
     BLE_HEAT_MODE_NUMS,
     BLE_MODE_ZONE_OFF,
-    DEFAULT_HEAT_MODE,
+    FALLBACK_HEAT_MODES,
     BLE_JSON_CMD_UUID,
     BLE_JSON_RETURN_UUID,
     BLE_MAX_AUTH_ATTEMPTS,
@@ -526,7 +526,7 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         """Device heat-mode numbers this zone supports (falls back to furnace)."""
         zc = self.zone_config(zone)
         if zc is None:
-            return [DEFAULT_HEAT_MODE]
+            return list(FALLBACK_HEAT_MODES)
         return zc.heat_modes
 
     def heat_mode_for(self, zone: int) -> int | None:
