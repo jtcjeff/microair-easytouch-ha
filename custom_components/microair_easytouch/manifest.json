@@ -1,7 +1,7 @@
 {
   "domain": "microair_easytouch",
   "name": "Micro-Air EasyTouch",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "bluetooth": [
     {
       "local_name": "EasyTouch*",

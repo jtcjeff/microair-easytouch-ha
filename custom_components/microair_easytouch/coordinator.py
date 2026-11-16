@@ -127,7 +127,17 @@ class ZoneConfig:
 
     @property
     def known(self) -> bool:
-        return bool(self.modes)
+        """Only trust a config that lists at least one real operating mode.
+
+        The Get Config format is decoded from the app, not confirmed on every
+        firmware. A reply that decodes to no cool/heat/auto mode is almost
+        certainly being misread, and trusting it would leave the zone with
+        nothing but "Off" in Home Assistant — so treat it as unknown.
+        """
+        return any(
+            m in self.modes
+            for m in (2, *BLE_HEAT_MODE_NUMS, *BLE_AUTO_MODE_NUMS)
+        )
 
     @property
     def heat_modes(self) -> list[int]:
@@ -733,6 +743,12 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
                 zone + 1, sorted(zc.modes), zc.heat_modes,
                 zc.min_cool, zc.max_cool, zc.min_heat, zc.max_heat, zc.raw,
             )
+            if not zc.known:
+                _LOGGER.warning(
+                    "Zone %d: couldn't read its equipment from the thermostat's "
+                    "config reply, so all modes are offered. Please report this "
+                    "line: %s", zone + 1, reply,
+                )
             self.zone_configs[zone] = zc
 
     async def _request(self, client: Any, command: dict[str, Any]) -> dict[str, Any] | None:

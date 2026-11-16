@@ -144,3 +144,16 @@ async def test_select_when_not_heating_only_remembers(hass):
     await s.async_select_option("Heat pump / heat strip")
     c._send_command.assert_not_awaited()
     assert s.current_option == "Heat pump / heat strip"
+
+
+def test_misread_config_does_not_hide_modes(hass):
+    """A config that decodes to no cool/heat/auto mode must not leave only Off."""
+    c = ble(hass); with_status(c, 2, 2, 2)
+    # e.g. MA as on/off flags, or a bitmask whose bits mean something else
+    c.zone_configs[0] = parse_zone_config(0, {"RT": "Config", "CFG": {"MA": [1, 0, 1, 0]}})
+    c.zone_configs[1] = parse_zone_config(1, {"RT": "Config", "CFG": {"MAV": 1 << 20}})
+    for z in (0, 1):
+        assert c.zone_config(z) is None
+        e = MicroAirClimate(c, MagicMock(title="t"), "id", CONN_TYPE_BLE, z)
+        assert {HVACMode.COOL, HVACMode.HEAT, HVACMode.AUTO} <= set(e.hvac_modes)
+        assert c.available_heat_modes(z) == [4]
