@@ -18,7 +18,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import update_coordinator
 
 from .const import (
+    BLE_AUTO_MODE_NUMS,
     BLE_FAN_MODE_DEVICE_TO_HA,
+    BLE_HEAT_MODE_NUMS,
+    BLE_MODE_ZONE_OFF,
+    DEFAULT_HEAT_MODE,
     BLE_JSON_CMD_UUID,
     BLE_JSON_RETURN_UUID,
     BLE_MAX_AUTH_ATTEMPTS,
@@ -47,6 +51,26 @@ def _safe(arr: list, idx: int) -> Any:
         return arr[idx]
     except (IndexError, TypeError):
         return None
+
+
+def _int_or(value: Any, default: int) -> int:
+    """int(value), or default only when the value is missing.
+
+    Unlike `int(value or default)`, a real 0 (e.g. fan "off") is preserved.
+    """
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+# Z_sts arrays shorter than this are incomplete (index 15 = current mode)
+BLE_MIN_ZONE_FIELDS = 16
+
+BLE_FAN_MODES_STANDARD = ["off", "low", "high", "auto"]
+WIFI_FAN_MODES = ["off", "low", "medium", "high", "auto"]
 
 
 # ── Shared data model ────────────────────────────────────────────────────────
@@ -78,8 +102,69 @@ class MicroAirData:
         "off", "low", "medium", "high", "auto",
     ])
 
+    # BLE only — the raw device mode number (e.g. 4 = furnace, 7 = electric heat)
+    mode_num: int | None = None
+
 
 ZoneData = dict[int, MicroAirData]   # type alias used throughout
+
+
+@dataclass
+class ZoneConfig:
+    """What one zone's equipment supports, from a BLE "Get Config" reply.
+
+    `modes` is the set of device mode numbers the zone offers. An empty set
+    means the thermostat didn't tell us, and callers fall back to defaults.
+    """
+
+    zone: int
+    modes: set[int] = field(default_factory=set)
+    min_cool: int | None = None
+    max_cool: int | None = None
+    min_heat: int | None = None
+    max_heat: int | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def known(self) -> bool:
+        return bool(self.modes)
+
+    @property
+    def heat_modes(self) -> list[int]:
+        return [m for m in BLE_HEAT_MODE_NUMS if m in self.modes]
+
+
+def parse_zone_config(zone: int, response: dict[str, Any]) -> ZoneConfig:
+    """Parse {"RT": "Config", "CFG": {"Zone": n, "MA": [...], "MAV": n, "SPL": [...]}}.
+
+    Key names come from the EasyTouch app: MA = list of available mode
+    numbers, MAV = the same as a bitmask (bit n set → mode n available),
+    SPL = setpoint limits [min cool, max cool, min heat, max heat].
+    Anything missing or malformed is simply left unknown.
+    """
+    cfg = response.get("CFG", response)
+    if not isinstance(cfg, dict):
+        cfg = {}
+    zc = ZoneConfig(zone=zone, raw=dict(cfg))
+
+    ma = cfg.get("MA")
+    if isinstance(ma, list) and ma:
+        zc.modes = {int(m) for m in ma if isinstance(m, (int, float))}
+    else:
+        mav = cfg.get("MAV")
+        if isinstance(mav, (int, float)) and int(mav) > 0:
+            mav = int(mav)
+            zc.modes = {bit for bit in range(32) if mav & (1 << bit)}
+    if zc.modes:
+        zc.modes.add(BLE_MODE_ZONE_OFF)  # zone off is always possible
+
+    spl = cfg.get("SPL")
+    if isinstance(spl, list) and len(spl) >= 4 and all(
+        isinstance(v, (int, float)) for v in spl[:4]
+    ):
+        zc.min_cool, zc.max_cool, zc.min_heat, zc.max_heat = (int(v) for v in spl[:4])
+
+    return zc
 
 
 # ── WiFi coordinator ─────────────────────────────────────────────────────────
@@ -134,7 +219,10 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
             writer.write(request)
             await writer.drain()
 
-            response = await asyncio.wait_for(reader.read(65536), timeout=10)
+            # HTTP/1.0: the server closes the socket when the response is done.
+            # A single read() can return only the first TCP segment, which would
+            # truncate multi-zone ShortStatus XML — so read until EOF.
+            response = await asyncio.wait_for(reader.read(), timeout=10)
         finally:
             writer.close()
             try:
@@ -245,7 +333,11 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
                 return zd
 
             zd.network_id = data0[4:6]
-            zd.setpoint = float(int(data0[16:18], 16))
+            zd.available_fan_modes = list(WIFI_FAN_MODES)
+            # While a debounced setpoint is waiting to be sent, keep showing it
+            # instead of letting a poll snap the UI back to the old value.
+            pending = self._pending_setpoints.get(zone)
+            zd.setpoint = float(pending if pending is not None else int(data0[16:18], 16))
             zd.current_temp = float(int(data0[18:20], 16))
 
             if len(data1) >= 14:
@@ -332,18 +424,34 @@ class MicroAirWiFiCoordinator(update_coordinator.DataUpdateCoordinator[ZoneData]
         task = self._setpoint_tasks.get(zone)
         if task and not task.done():
             return
-        self._setpoint_tasks[zone] = asyncio.create_task(
+        self._setpoint_tasks[zone] = self.hass.async_create_task(
             self._push_setpoint_delayed(zone)
         )
 
     async def _push_setpoint_delayed(self, zone: int) -> None:
-        await asyncio.sleep(SETPOINT_DEBOUNCE_SECONDS)
-        sp = self._pending_setpoints.pop(zone, None)
-        if sp is None:
-            return
-        cmd = WIFI_CMD_SETPOINT_PREFIX + f"{int(sp):02x}"
-        if await self._transmit(zone, cmd):
+        ok = False
+        while True:
+            await asyncio.sleep(SETPOINT_DEBOUNCE_SECONDS)
+            sp = self._pending_setpoints.get(zone)
+            if sp is None:
+                break
+            cmd = WIFI_CMD_SETPOINT_PREFIX + f"{int(sp):02x}"
+            ok = await self._transmit(zone, cmd)
+            if self._pending_setpoints.get(zone) == sp:
+                # Nothing newer arrived while we were sending — done.
+                self._pending_setpoints.pop(zone, None)
+                break
+            # The user changed it again mid-send: wait and send the newer value.
+        if ok:
             await self.async_request_refresh()
+
+    async def async_shutdown(self) -> None:
+        """Cancel any setpoint pushes still waiting when the entry unloads."""
+        await super().async_shutdown()
+        for task in self._setpoint_tasks.values():
+            task.cancel()
+        self._setpoint_tasks.clear()
+        self._pending_setpoints.clear()
 
     async def async_set_fan_mode(self, fan_mode: str, zone: int = 0) -> None:
         nibble = WIFI_FAN_MODE_TO_NIBBLE.get(fan_mode)
@@ -392,10 +500,59 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         self._ble_op_lock = asyncio.Lock()   # serialise reads/writes on the connection
         self._authenticated = False
 
+        # Per-zone equipment config (from "Get Config"), fetched once
+        self.zone_configs: dict[int, ZoneConfig] = {}
+        self._config_attempts = 0
+        # Per-zone heat-mode number to use when HA asks for plain "heat"
+        self.heat_mode_preference: dict[int, int] = {}
+
+    # ── Heat source helpers ──────────────────────────────────────────────────
+
+    def zone_config(self, zone: int) -> ZoneConfig | None:
+        zc = self.zone_configs.get(zone)
+        return zc if zc and zc.known else None
+
+    def available_heat_modes(self, zone: int) -> list[int]:
+        """Device heat-mode numbers this zone supports (falls back to furnace)."""
+        zc = self.zone_config(zone)
+        if zc is None:
+            return [DEFAULT_HEAT_MODE]
+        return zc.heat_modes
+
+    def heat_mode_for(self, zone: int) -> int | None:
+        """Which device mode to send for HA's "heat" on this zone."""
+        available = self.available_heat_modes(zone)
+        if not available:
+            return None
+        zd = (self.data or {}).get(zone)
+        # Already heating with a valid source → keep it
+        if zd and zd.mode_num in available:
+            return zd.mode_num
+        pref = self.heat_mode_preference.get(zone)
+        if pref in available:
+            return pref
+        return available[0]
+
+    def auto_mode_for(self, zone: int) -> int:
+        """Which device auto-mode number to send for HA's "auto"."""
+        zc = self.zone_config(zone)
+        zd = (self.data or {}).get(zone)
+        if zd and zd.mode_num in BLE_AUTO_MODE_NUMS and (
+            zc is None or zd.mode_num in zc.modes
+        ):
+            return zd.mode_num
+        if zc is not None:
+            for m in (11, 10, 9, 8):
+                if m in zc.modes:
+                    return m
+        return 11
+
     # ── Disconnect callback (called by bleak from BLE thread) ────────────────
 
     def _on_disconnect(self, client: Any) -> None:
         """Bleak fires this when the connection drops unexpectedly."""
+        if client is not self._client:
+            return  # an old client we already dropped on purpose
         _LOGGER.warning(
             "BLE %s connection lost — will reconnect automatically on next poll",
             self._mac,
@@ -455,16 +612,27 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
                     _LOGGER.error("BLE connect failed for %s: %s", self._mac, exc)
                 return None
 
-    async def async_shutdown(self) -> None:
-        """Disconnect cleanly when the integration is unloaded."""
+    async def _reset_connection(self) -> None:
+        """Drop the current connection, actually disconnecting it.
+
+        The thermostat only accepts one BLE connection at a time, so simply
+        forgetting a client (without disconnecting) can leave a half-open
+        session that blocks every later reconnect attempt.
+        """
         client = self._client
         self._client = None
+        self._authenticated = False
         if client is not None:
             try:
                 await client.disconnect()
-                _LOGGER.debug("BLE %s disconnected cleanly on shutdown", self._mac)
-            except Exception:
-                pass
+                _LOGGER.debug("BLE %s disconnected", self._mac)
+            except Exception as exc:
+                _LOGGER.debug("BLE %s disconnect error (ignored): %s", self._mac, exc)
+
+    async def async_shutdown(self) -> None:
+        """Disconnect cleanly when the integration is unloaded."""
+        await super().async_shutdown()
+        await self._reset_connection()
 
     # ── Connection test ──────────────────────────────────────────────────────
 
@@ -499,10 +667,15 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
                 self._authenticated = True
 
             result = await self._poll_device(client)
+            if result:
+                try:
+                    await self._load_zone_configs(client)
+                except Exception as exc:  # never let config break polling
+                    _LOGGER.debug("Zone config request failed: %s", exc)
 
         if not result:
             # Got a connection but no data — treat as stale and force reconnect
-            self._client = None
+            await self._reset_connection()
             raise update_coordinator.UpdateFailed(
                 f"BLE poll missed for {self._mac} — will retry in {BLE_UPDATE_INTERVAL.seconds}s"
             )
@@ -523,6 +696,47 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
             return self._parse_all_zones(raw_status)
 
         # ── Fall back: Get Status via EE01 / FF01 ────────────────────────────
+        command: dict[str, Any] = {"Type": "Get Status", "Zone": 0, "TM": int(time.time())}
+        if self._email:
+            command["EM"] = self._email
+        raw_status = await self._request(client, command)
+        if raw_status is None:
+            return {}
+
+        _LOGGER.debug("FF01 status: %s", raw_status)
+        return self._parse_all_zones(raw_status)
+
+    async def _load_zone_configs(self, client: Any) -> None:
+        """Ask each zone what equipment it has ("Get Config"), once.
+
+        The EasyTouch app sends {"Type": "Get Config", "Zone": n} per zone and
+        reads the zone's available modes (heat pump, furnace, heat strip...)
+        from the reply. Best-effort: on failure we keep the default modes and
+        try again on the next poll, up to 3 times.
+        """
+        if self._config_attempts >= 3 or all(
+            z in self.zone_configs for z in range(self._zone_count)
+        ):
+            return
+        self._config_attempts += 1
+        for zone in range(self._zone_count):
+            if zone in self.zone_configs:
+                continue
+            reply = await self._request(client, {"Type": "Get Config", "Zone": zone})
+            if not reply or ("CFG" not in reply and reply.get("RT") != "Config"):
+                _LOGGER.debug("Zone %d: no config reply (%r)", zone, reply)
+                continue
+            zc = parse_zone_config(zone, reply)
+            # INFO so users can share it when reporting unusual equipment
+            _LOGGER.info(
+                "Zone %d config: modes=%s heat=%s setpoint limits=%s/%s cool, %s/%s heat (raw %s)",
+                zone + 1, sorted(zc.modes), zc.heat_modes,
+                zc.min_cool, zc.max_cool, zc.min_heat, zc.max_heat, zc.raw,
+            )
+            self.zone_configs[zone] = zc
+
+    async def _request(self, client: Any, command: dict[str, Any]) -> dict[str, Any] | None:
+        """Write a JSON command to EE01 and return the JSON reply from FF01."""
         chunks: list[bytes] = []
         response_ready = asyncio.Event()
 
@@ -543,19 +757,15 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
             _LOGGER.debug("NOTIFY unavailable (%s) — will use READ", exc)
 
         try:
-            raw_status = await self._get_status(client, chunks, response_ready, using_notify)
+            return await self._send_and_read(
+                client, command, chunks, response_ready, using_notify
+            )
         finally:
             if using_notify:
                 try:
                     await client.stop_notify(BLE_JSON_RETURN_UUID)
                 except Exception:
                     pass
-
-        if raw_status is None:
-            return {}
-
-        _LOGGER.debug("FF01 status: %s", raw_status)
-        return self._parse_all_zones(raw_status)
 
     async def _read_status_only(self, client: Any) -> dict[str, Any] | None:
         """Try to read the statusOnly characteristic (BB01) without sending a command.
@@ -621,17 +831,15 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         )
         return False
 
-    async def _get_status(
+    async def _send_and_read(
         self,
         client: Any,
+        command: dict[str, Any],
         chunks: list[bytes],
         response_ready: asyncio.Event,
         using_notify: bool,
     ) -> dict[str, Any] | None:
-        """Send a single Get Status and return the parsed JSON response."""
-        command: dict[str, Any] = {"Type": "Get Status", "Zone": 0, "TM": int(time.time())}
-        if self._email:
-            command["EM"] = self._email
+        """Send one JSON command and return the parsed JSON response."""
         cmd_bytes = json.dumps(command).encode("utf-8")
         _LOGGER.debug("→ %s", command)
 
@@ -707,7 +915,7 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
             else:
                 _LOGGER.error("BLE command error: %s", exc)
                 # Force reconnect on next operation
-                self._client = None
+                await self._reset_connection()
             return False
 
     # ── State parsing ────────────────────────────────────────────────────────
@@ -736,12 +944,22 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
             if zone >= self._zone_count:
                 continue
 
-            zd = MicroAirData(zone=zone)
+            if not isinstance(info, list) or len(info) < BLE_MIN_ZONE_FIELDS:
+                # Don't report made-up defaults (mode "off", fan "auto") for a
+                # zone we didn't get real data for — leave it unavailable.
+                _LOGGER.warning(
+                    "Zone %s has incomplete data (%s) — skipping",
+                    zone_key, info,
+                )
+                continue
+
+            zd = MicroAirData(zone=zone, available_fan_modes=list(BLE_FAN_MODES_STANDARD))
 
             try:
                 zd.current_temp = _safe(info, BLE_IDX_TEMPERATURE)
 
-                mode_num = int(_safe(info, BLE_IDX_MODE_NUM) or 0)
+                mode_num = _int_or(_safe(info, BLE_IDX_MODE_NUM), 0)
+                zd.mode_num = mode_num
                 ha_mode_str = BLE_MODE_NUM_TO_HA.get(mode_num, "off")
                 try:
                     zd.hvac_mode = HVACMode(ha_mode_str)
@@ -764,18 +982,18 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
 
                 # Fan mode
                 if zd.hvac_mode == HVACMode.FAN_ONLY:
-                    fan_num = int(_safe(info, BLE_IDX_FAN_ONLY_MODE) or 0)
+                    fan_num = _int_or(_safe(info, BLE_IDX_FAN_ONLY_MODE), 0)
                     zd.available_fan_modes = ["off", "low", "high"]
                 elif zd.hvac_mode == HVACMode.COOL:
-                    fan_num = int(_safe(info, BLE_IDX_COOL_FAN_MODE) or 128)
+                    fan_num = _int_or(_safe(info, BLE_IDX_COOL_FAN_MODE), 128)
                 elif zd.hvac_mode == HVACMode.HEAT:
-                    fan_num = int(_safe(info, BLE_IDX_HEAT_FAN_MODE) or 128)
+                    fan_num = _int_or(_safe(info, BLE_IDX_HEAT_FAN_MODE), 128)
                 else:
-                    fan_num = int(_safe(info, BLE_IDX_AUTO_FAN_MODE) or 128)
+                    fan_num = _int_or(_safe(info, BLE_IDX_AUTO_FAN_MODE), 128)
                 zd.fan_mode = BLE_FAN_MODE_DEVICE_TO_HA.get(fan_num, "auto")
 
                 # HVAC action from current_mode_num
-                cur_num = int(_safe(info, BLE_IDX_CURRENT_MODE) or 0)
+                cur_num = _int_or(_safe(info, BLE_IDX_CURRENT_MODE), 0)
                 cur_str = BLE_CURRENT_MODE_MAP.get(cur_num, "off")
 
                 if zd.hvac_mode == HVACMode.OFF or 7 in param:
@@ -789,9 +1007,9 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
                 elif cur_str == "auto":
                     ct = zd.current_temp
                     high, low = zd.setpoint_high, zd.setpoint_low
-                    if ct and high and ct > high:
+                    if ct is not None and high is not None and ct > high:
                         zd.hvac_action = HVACAction.COOLING
-                    elif ct and low and ct < low:
+                    elif ct is not None and low is not None and ct < low:
                         zd.hvac_action = HVACAction.HEATING
                     else:
                         zd.hvac_action = HVACAction.IDLE
@@ -814,16 +1032,53 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
     # ── Commands ─────────────────────────────────────────────────────────────
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode, zone: int = 0) -> None:
+        """Change one zone's mode.
+
+        Off is sent as `mode: 0` ("Zone Off") WITHOUT a `power` key —
+        `power: 0` is system-wide and would shut down every zone.
+        """
         from .const import BLE_HVAC_HA_TO_DEVICE
-        device_mode = BLE_HVAC_HA_TO_DEVICE.get(hvac_mode.value, 0)
+
+        if hvac_mode == HVACMode.OFF:
+            changes: dict[str, Any] = {"zone": zone, "mode": BLE_MODE_ZONE_OFF}
+        else:
+            if hvac_mode == HVACMode.HEAT:
+                device_mode = self.heat_mode_for(zone)
+                if device_mode is None:
+                    _LOGGER.warning("Zone %d has no heat source configured", zone + 1)
+                    return
+            elif hvac_mode in (HVACMode.AUTO, HVACMode.HEAT_COOL):
+                device_mode = self.auto_mode_for(zone)
+            else:
+                device_mode = BLE_HVAC_HA_TO_DEVICE.get(hvac_mode.value, 0)
+            # power:1 makes sure the system is on so the zone can actually run
+            changes = {"zone": zone, "power": 1, "mode": device_mode}
+
+        command = {"Type": "Change", "Zone": zone, "Changes": changes}
+        if await self._send_command(command):
+            await self.async_request_refresh()
+
+    async def async_set_heat_source(self, zone: int, heat_mode: int) -> None:
+        """Remember the zone's preferred heat source; switch now if it's heating."""
+        self.heat_mode_preference[zone] = heat_mode
+        zd = (self.data or {}).get(zone)
+        if zd and zd.hvac_mode == HVACMode.HEAT and zd.mode_num != heat_mode:
+            command = {
+                "Type": "Change",
+                "Zone": zone,
+                "Changes": {"zone": zone, "power": 1, "mode": heat_mode},
+            }
+            if await self._send_command(command):
+                await self.async_request_refresh()
+        else:
+            self.async_update_listeners()
+
+    async def async_set_system_power(self, on: bool) -> None:
+        """System-wide power — turns every zone on or off together."""
         command = {
             "Type": "Change",
-            "Zone": zone,
-            "Changes": {
-                "zone": zone,
-                "power": 0 if hvac_mode == HVACMode.OFF else 1,
-                "mode": device_mode,
-            },
+            "Zone": 0,
+            "Changes": {"zone": 0, "power": 1 if on else 0},
         }
         if await self._send_command(command):
             await self.async_request_refresh()
@@ -835,7 +1090,8 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         setpoint_high: float | None = None,
         setpoint_low: float | None = None,
     ) -> None:
-        changes: dict[str, Any] = {"zone": zone, "power": 1}
+        # No `power` key: changing a setpoint shouldn't switch the system on.
+        changes: dict[str, Any] = {"zone": zone}
         zone_data = (self.data or {}).get(zone)
         current_mode = zone_data.hvac_mode if zone_data else HVACMode.OFF
 
@@ -852,7 +1108,7 @@ class MicroAirBLECoordinator(update_coordinator.DataUpdateCoordinator[ZoneData])
         if setpoint_low is not None:
             changes["autoHeat_sp"] = int(setpoint_low)
 
-        if len(changes) > 2:
+        if len(changes) > 1:
             command = {"Type": "Change", "Zone": zone, "Changes": changes}
             if await self._send_command(command):
                 await self.async_request_refresh()

@@ -10,8 +10,9 @@ A full-featured Home Assistant custom integration for **Micro-Air EasyTouch RV t
 
 - **WiFi and Bluetooth** — choose the connection method that works best for your setup
 - **Multi-zone support** — up to 3 independently controlled zones
-- **Full HVAC mode control** — Off, Cool, Heat, Auto, Dry, Fan Only
-- **Fan speed control** — Off, Low, High, Auto
+- **Full HVAC mode control** — Off, Cool, Heat, Auto, Dry, Fan Only *(Fan Only: Bluetooth only)*
+- **Fan speed control** — Off, Low, High, Auto *(WiFi adds Medium)*
+- **Auto mode setpoints** — Bluetooth uses separate heat/cool setpoints; WiFi uses a single setpoint
 - **HVAC action reporting** — know when the unit is actually Heating, Cooling, or Idle
 - **Temperature sensors** — per-zone current temperature
 - **Reboot button** — (Bluetooth only) remotely restart the thermostat
@@ -80,7 +81,17 @@ For each zone the integration creates:
 |---|---|---|
 | Zone N Thermostat | `climate` | Full HVAC control — mode, fan speed, setpoint |
 | Zone N Temperature | `sensor` | Current temperature reading |
+| Zone N Heat source | `select` | Which heat source "Heat" uses — Furnace, Heat pump / heat strip, … (only what that zone's equipment reports) *(Bluetooth only)* |
 | Reboot | `button` | Restart the thermostat *(Bluetooth only)* |
+| System off / System on | `button` | Turn **every** zone off or on at once *(Bluetooth only)* |
+
+### Zone off vs. system off (Bluetooth)
+
+Setting a zone's thermostat to **Off** turns off only that zone. To shut down the whole system, press the **System off** button.
+
+### Heat sources (Bluetooth)
+
+At startup the integration asks each zone what equipment it has, and the thermostat entity only offers the modes that zone supports. The detected config is logged at INFO level (`Zone N config: ...`). If a zone reports both a furnace and a heat pump or heat strip, pick one with **Zone N Heat source**. Changing it while the zone is heating switches over right away; otherwise the choice is saved and used the next time the zone is set to Heat. If the thermostat doesn't report a zone's config, Heat uses the furnace, as before.
 
 Zones are named **Zone 1**, **Zone 2**, **Zone 3** — you can rename them in HA to match your RV layout (e.g. "Living Area", "Bedroom").
 

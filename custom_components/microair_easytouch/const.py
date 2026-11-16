@@ -7,7 +7,7 @@ DOMAIN = "microair_easytouch"
 
 # Platforms
 PLATFORMS_WIFI = ["climate", "sensor"]
-PLATFORMS_BLE = ["climate", "sensor", "button"]
+PLATFORMS_BLE = ["climate", "sensor", "button", "select"]
 
 # Config entry keys
 CONF_CONNECTION_TYPE = "connection_type"
@@ -64,18 +64,53 @@ BLE_CURRENT_MODE_MAP = {
     3:  "cool_on",   # compressor starting
     4:  "heat",
     5:  "heat_on",   # heat starting
+    7:  "heat",      # electric heat (seen in some firmware)
     11: "auto",
 }
 
 # mode_num → HA HVACMode (set mode, not current action)
+# Mode 0 is "Zone Off" — it turns off just this zone. The separate `power`
+# key in a Change command is SYSTEM-WIDE and turns off every zone.
+# Heat modes (from the EasyTouch app's mode table + live bench captures):
+#   3 = both heat sources, 4 = furnace / gas / Aqua-Hot,
+#   5 = heat pump, 7 = electric heat (heat pump OR heat strip, per zone board)
+# Auto variants: 8 = auto, 9 = auto + heat strip, 10 = auto + heat pump,
+#   11 = auto + furnace
 BLE_MODE_NUM_TO_HA = {
     0:  "off",
     1:  "fan_only",
     2:  "cool",
+    3:  "heat",
     4:  "heat",
+    5:  "heat",
     6:  "dry",
+    7:  "heat",
+    8:  "auto",
+    9:  "auto",
+    10: "auto",
     11: "auto",
 }
+
+BLE_MODE_ZONE_OFF = 0
+BLE_HEAT_MODE_NUMS = (3, 4, 5, 7)
+BLE_AUTO_MODE_NUMS = (8, 9, 10, 11)
+
+# Heat source option keys (used by the per-zone "Heat source" select)
+HEAT_SOURCE_BY_MODE = {
+    4: "furnace",
+    5: "heat_pump",
+    7: "electric_heat",
+    3: "both",
+}
+MODE_BY_HEAT_SOURCE = {v: k for k, v in HEAT_SOURCE_BY_MODE.items()}
+HEAT_SOURCE_LABELS = {
+    "furnace":       "Furnace",
+    "heat_pump":     "Heat pump",
+    "electric_heat": "Heat pump / heat strip",
+    "both":          "Both heat sources",
+}
+# Used when the thermostat doesn't report its configuration
+DEFAULT_HEAT_MODE = 4
 
 # ── BLE response array indices (info = Z_sts["zone_key"]) ──────────────────
 BLE_IDX_AUTO_HEAT_SP   = 0
@@ -125,11 +160,13 @@ WIFI_CONTROL_MODE_MAP = {
 }
 
 # WiFi Fan mode nibble at data0[15:16]
+# 0-3 are manual speeds (the same values sent by the set-fan command below);
+# 8-10 are auto with the speed it is currently running at.
 WIFI_FAN_STATE_MAP = {
     0:  ("off",    "off"),    # (fan_mode, fan_state)
-    1:  ("on",     "low"),
-    2:  ("on",     "medium"),
-    3:  ("auto",   "high"),
+    1:  ("low",    "low"),
+    2:  ("medium", "medium"),
+    3:  ("high",   "high"),
     8:  ("auto",   "low"),
     9:  ("auto",   "medium"),
     10: ("auto",   "high"),

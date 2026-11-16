@@ -1,0 +1,4 @@
+pytest-homeassistant-custom-component
+bleak
+bleak-retry-connector
+defusedxml

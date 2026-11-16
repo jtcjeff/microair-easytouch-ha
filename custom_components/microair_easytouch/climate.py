@@ -21,9 +21,11 @@ from .const import (
     CONF_CONNECTION_TYPE,
     CONF_IP_ADDRESS,
     CONF_MAC_ADDRESS,
+    BLE_AUTO_MODE_NUMS,
     CONN_TYPE_BLE,
     CONN_TYPE_WIFI,
     DOMAIN,
+    HEAT_SOURCE_BY_MODE,
 )
 from .coordinator import MicroAirBLECoordinator, MicroAirData, MicroAirWiFiCoordinator
 
@@ -87,6 +89,27 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
         self._zone = zone
         self._conn_type = conn_type
 
+        if conn_type == CONN_TYPE_WIFI:
+            # WiFi has no fan-only command, and its Auto mode uses a single
+            # setpoint (the thermostat reports and accepts just one value).
+            self._attr_hvac_modes = [
+                m for m in self._attr_hvac_modes if m != HVACMode.FAN_ONLY
+            ]
+            self._attr_supported_features = (
+                ClimateEntityFeature.TARGET_TEMPERATURE
+                | ClimateEntityFeature.FAN_MODE
+                | ClimateEntityFeature.TURN_ON
+                | ClimateEntityFeature.TURN_OFF
+            )
+        else:
+            self._attr_supported_features = (
+                ClimateEntityFeature.TARGET_TEMPERATURE
+                | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+                | ClimateEntityFeature.FAN_MODE
+                | ClimateEntityFeature.TURN_ON
+                | ClimateEntityFeature.TURN_OFF
+            )
+
         # Zone 0 → "Zone 1", zone 1 → "Zone 2", etc.
         self._attr_name = f"Zone {zone + 1}"
         self._attr_unique_id = f"{DOMAIN}_{device_id}_zone{zone}_climate"
@@ -105,17 +128,41 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
             return None
         return self.coordinator.data.get(self._zone)
 
-    # ── Supported features ───────────────────────────────────────────────────
+    def _ble_zone_config(self):
+        if self._conn_type != CONN_TYPE_BLE:
+            return None
+        return self.coordinator.zone_config(self._zone)
 
     @property
-    def supported_features(self) -> ClimateEntityFeature:
-        return (
-            ClimateEntityFeature.TARGET_TEMPERATURE
-            | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
-            | ClimateEntityFeature.FAN_MODE
-            | ClimateEntityFeature.TURN_ON
-            | ClimateEntityFeature.TURN_OFF
-        )
+    def hvac_modes(self) -> list[HVACMode]:
+        """Only offer modes this zone's equipment supports (when known)."""
+        zc = self._ble_zone_config()
+        if zc is None:
+            return self._attr_hvac_modes
+        modes = [HVACMode.OFF]
+        if 2 in zc.modes:
+            modes.append(HVACMode.COOL)
+        if zc.heat_modes:
+            modes.append(HVACMode.HEAT)
+        if any(m in zc.modes for m in BLE_AUTO_MODE_NUMS):
+            modes.append(HVACMode.AUTO)
+        if 6 in zc.modes:
+            modes.append(HVACMode.DRY)
+        if 1 in zc.modes:
+            modes.append(HVACMode.FAN_ONLY)
+        return modes
+
+    @property
+    def min_temp(self) -> float:
+        zc = self._ble_zone_config()
+        limits = [v for v in ((zc.min_cool, zc.min_heat) if zc else ()) if v]
+        return float(min(limits)) if limits else TEMP_MIN
+
+    @property
+    def max_temp(self) -> float:
+        zc = self._ble_zone_config()
+        limits = [v for v in ((zc.max_cool, zc.max_heat) if zc else ()) if v]
+        return float(max(limits)) if limits else TEMP_MAX
 
     @property
     def available(self) -> bool:
@@ -143,21 +190,27 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
         zd = self._zone_data
         if zd is None:
             return None
-        if zd.hvac_mode in (HVACMode.AUTO, HVACMode.HEAT_COOL):
+        if self._uses_range(zd):
             return None
         return zd.setpoint
+
+    def _uses_range(self, zd: MicroAirData) -> bool:
+        """BLE Auto mode has separate heat/cool setpoints; WiFi Auto has one."""
+        return self._conn_type == CONN_TYPE_BLE and zd.hvac_mode in (
+            HVACMode.AUTO, HVACMode.HEAT_COOL
+        )
 
     @property
     def target_temperature_high(self) -> float | None:
         zd = self._zone_data
-        if zd is None or zd.hvac_mode not in (HVACMode.AUTO, HVACMode.HEAT_COOL):
+        if zd is None or not self._uses_range(zd):
             return None
         return zd.setpoint_high
 
     @property
     def target_temperature_low(self) -> float | None:
         zd = self._zone_data
-        if zd is None or zd.hvac_mode not in (HVACMode.AUTO, HVACMode.HEAT_COOL):
+        if zd is None or not self._uses_range(zd):
             return None
         return zd.setpoint_low
 
@@ -169,7 +222,11 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
     @property
     def fan_modes(self) -> list[str]:
         zd = self._zone_data
-        return zd.available_fan_modes if zd else ["off", "low", "high", "auto"]
+        if zd:
+            return zd.available_fan_modes
+        if self._conn_type == CONN_TYPE_WIFI:
+            return ["off", "low", "medium", "high", "auto"]
+        return ["off", "low", "high", "auto"]
 
     @property
     def icon(self) -> str:
@@ -192,6 +249,15 @@ class MicroAirClimate(CoordinatorEntity, ClimateEntity):
             attrs["fan_state"] = zd.fan_state
             if zd.line_voltage is not None:
                 attrs["line_voltage"] = zd.line_voltage
+            if zd.mode_num is not None:
+                attrs["device_mode"] = zd.mode_num
+                if zd.mode_num in HEAT_SOURCE_BY_MODE:
+                    attrs["heat_source"] = HEAT_SOURCE_BY_MODE[zd.mode_num]
+        zc = self._ble_zone_config()
+        if zc is not None:
+            attrs["available_heat_sources"] = [
+                HEAT_SOURCE_BY_MODE[m] for m in zc.heat_modes
+            ]
         return attrs
 
     # ── Commands ─────────────────────────────────────────────────────────────

@@ -13,7 +13,6 @@ from .const import (
     CONF_MAC_ADDRESS,
     CONF_PASSWORD,
     CONF_ZONE_COUNT,
-    CONN_TYPE_BLE,
     CONN_TYPE_WIFI,
     DEFAULT_ZONE_COUNT,
     DOMAIN,
@@ -59,7 +58,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         platforms = PLATFORMS_BLE
 
-    await coordinator.async_config_entry_first_refresh()
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except Exception:
+        # HA will retry setup later — don't leave a BLE connection open meanwhile,
+        # or the thermostat (one connection max) will reject the retry.
+        await coordinator.async_shutdown()
+        raise
 
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
@@ -78,10 +83,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, platforms):
         entry_data = hass.data[DOMAIN].pop(entry.entry_id)
-        # Disconnect the persistent BLE connection cleanly on unload
-        if conn_type == CONN_TYPE_BLE:
-            coordinator = entry_data.get("coordinator")
-            if coordinator is not None:
-                await coordinator.async_shutdown()
+        # BLE: close the persistent connection. WiFi: cancel pending setpoint pushes.
+        coordinator = entry_data.get("coordinator")
+        if coordinator is not None:
+            await coordinator.async_shutdown()
 
     return unload_ok

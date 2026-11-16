@@ -4,3 +4,5 @@ __pycache__/
 *.pyo
 .env
 .claude/
+HA_Install/
+.pytest_cache/

@@ -221,15 +221,19 @@ class MicroAirConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(f"ble_{mac}")
             self._abort_if_unique_id_configured()
 
+            from .coordinator import MicroAirBLECoordinator
+            coordinator = MicroAirBLECoordinator(
+                self.hass, mac, password, email, name, zone_count=1
+            )
             try:
-                from .coordinator import MicroAirBLECoordinator
-                coordinator = MicroAirBLECoordinator(
-                    self.hass, mac, password, email, name, zone_count=1
-                )
                 await coordinator.test_connection()
             except Exception as exc:
                 _LOGGER.warning("BLE connection test failed: %s", exc)
                 errors["base"] = "cannot_connect"
+            finally:
+                # Release the test connection — the thermostat only allows one,
+                # and the real coordinator needs it as soon as the entry loads.
+                await coordinator.async_shutdown()
 
             if not errors:
                 self._partial_data = {
